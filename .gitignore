@@ -1,0 +1,144 @@
+# ---------- Environment / Secrets ----------
+.env
+.env.*
+!.env.example
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
+
+# ---------- Node / React / Vite ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+dist/
+build/
+.vite/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+
+*.so
+
+.Python
+*.egg
+*.egg-info/
+.eggs/
+
+pip-wheel-metadata/
+wheels/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ---------- Python tooling ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---------- FastAPI / Uvicorn ----------
+*.log
+
+# ---------- Generated Data ----------
+data/
+datasets/
+generated_data/
+simulation_data/
+replay_data/
+
+# Keep directory structure if needed
+!data/.gitkeep
+!datasets/.gitkeep
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ---------- Database ----------
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------- IDEs ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+.idea/
+*.iml
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Temporary files ----------
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ---------- Test / Coverage ----------
+coverage/
+.nyc_output/
+
+# ---------- Build / Cache ----------
+.cache/
+.parcel-cache/
+.eslintcache
+
+# ---------- Security / Cryptography ----------
+# Never commit private keys or generated cryptographic material
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+keys/
+certs/
+secrets/
+
+# ---------- Model / ML artifacts ----------
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.onnx
+*.pt
+*.pth
+
+models/
+checkpoints/
+
+# ---------- Docker ----------
+# Uncomment if you don't want local Docker files tracked
+# .docker/
+
+# ---------- Generated reports ----------
+reports/
+exports/
+
+# ---------- Local testing ----------
+*.local
+.local/
