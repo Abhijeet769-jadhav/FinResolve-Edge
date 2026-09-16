@@ -218,8 +218,8 @@ export default function AttackSimulator({ incident, simulationResults, onSelectS
             <Tooltip 
               contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace' }}
             />
-            <Bar dataKey="containmentScore" name="Containment Score %" fill="#10B981" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="accountsAtRisk" name="Accounts at Risk" fill="#EF4444" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="containmentScore" name="Containment Score %" fill="#10B981" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="accountsAtRisk" name="Accounts at Risk" fill="#EF4444" radius={[4, 4, 0, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
       </div>

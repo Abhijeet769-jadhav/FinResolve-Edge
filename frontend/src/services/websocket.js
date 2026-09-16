@@ -9,6 +9,11 @@ class WebSocketClient {
   }
 
   connect() {
+    // Prevent duplicate concurrent connections
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
     const wsUrl = `ws://${window.location.hostname || '127.0.0.1'}:8000/ws`;
 
     try {
@@ -33,9 +38,14 @@ class WebSocketClient {
       };
 
       this.ws.onclose = () => {
+        const wasConnected = this.isConnected;
         this.isConnected = false;
-        this.emit('connection_status', { connected: false });
-        this.scheduleReconnect();
+        if (wasConnected) {
+          this.emit('connection_status', { connected: false });
+        }
+        if (!this.explicitDisconnect) {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onerror = (err) => {
@@ -47,11 +57,29 @@ class WebSocketClient {
     }
   }
 
+  disconnect() {
+    this.explicitDisconnect = true;
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch (e) {
+        // ignore
+      }
+      this.ws = null;
+    }
+    this.isConnected = false;
+  }
+
   scheduleReconnect() {
+    if (this.explicitDisconnect) return;
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       const delay = Math.min(this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts - 1), 10000);
-      setTimeout(() => this.connect(), delay);
+      setTimeout(() => {
+        if (!this.explicitDisconnect) {
+          this.connect();
+        }
+      }, delay);
     }
   }
 

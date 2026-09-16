@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Navbar from './components/Navbar';
 import LiveWorkflowPipeline from './components/LiveWorkflowPipeline';
 import MetricsBanner from './components/MetricsBanner';
@@ -11,6 +11,7 @@ import HumanApprovalModal from './components/HumanApprovalModal';
 import IncidentDetailModal from './components/IncidentDetailModal';
 import EdgeNodesMap from './components/EdgeNodesMap';
 import SystemStatusPanel from './components/SystemStatusPanel';
+import TelemetryActivityChart from './components/TelemetryActivityChart';
 
 import { wsClient } from './services/websocket';
 import { 
@@ -43,6 +44,14 @@ export default function App() {
   const [selectedStrategyForApproval, setSelectedStrategyForApproval] = useState(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
 
+  // High-frequency decoupling buffers (User Recommendations 1, 2, 3)
+  const eventBufferRef = useRef([]);
+  const anomalyBufferRef = useRef({});
+  const latestSignalRef = useRef(null);
+  const graphBufferRef = useRef(null);
+  const pendingIncidentRef = useRef(null);
+  const [telemetryHistory, setTelemetryHistory] = useState([]);
+
   // Load initial data
   const refreshAll = useCallback(async () => {
     try {
@@ -52,7 +61,7 @@ export default function App() {
         fetchGraph(),
         fetchSystemStatus()
       ]);
-      setEvents(evts || []);
+      setEvents((evts || []).slice(0, 35));
       setIncidents(incs || []);
       if (incs && incs.length > 0) {
         const primary = incs.find(i => i.status === 'ACTIVE') || incs[0];
@@ -61,8 +70,16 @@ export default function App() {
           setSelectedStrategyForApproval(primary.recommended_action);
         }
       }
-      setGraphData(grph || { nodes: [], edges: [] });
+      if (grph) {
+        setGraphData({
+          nodes: (grph.nodes || []).slice(0, 50),
+          edges: (grph.edges || []).slice(0, 80)
+        });
+      }
       setSystemStatus(status);
+      if (status?.telemetry_history) {
+        setTelemetryHistory(status.telemetry_history);
+      }
     } catch (e) {
       console.error('Failed to load initial data:', e);
     }
@@ -74,52 +91,120 @@ export default function App() {
     // WebSocket initialization
     wsClient.connect();
 
+    // 1 & 2. React: Flush event stream exactly 4 times/sec (250ms batching window)
+    const eventFlushTimer = setInterval(() => {
+      const hasEvents = eventBufferRef.current.length > 0;
+      const hasAnomalies = Object.keys(anomalyBufferRef.current).length > 0;
+      const hasSignal = latestSignalRef.current !== null;
+
+      if (!hasEvents && !hasAnomalies && !hasSignal) return;
+
+      if (hasEvents) {
+        const newEvents = eventBufferRef.current.splice(0);
+        setEvents(prev => [
+          ...newEvents.reverse(),
+          ...prev
+        ].slice(0, 35));
+      }
+
+      if (hasAnomalies) {
+        const newAnomalies = { ...anomalyBufferRef.current };
+        anomalyBufferRef.current = {};
+        setAnomalies(prev => ({
+          ...prev,
+          ...newAnomalies
+        }));
+      }
+
+      if (hasSignal) {
+        setLatestSignal(latestSignalRef.current);
+        latestSignalRef.current = null;
+      }
+    }, 250);
+
+    // 3 & 4. React Flow: Flush graph at most 2 times/sec (500ms window) with strict node/edge caps
+    const graphFlushTimer = setInterval(() => {
+      if (graphBufferRef.current) {
+        const rawGraph = graphBufferRef.current;
+        graphBufferRef.current = null;
+        const MAX_GRAPH_NODES = 50;
+        const MAX_GRAPH_EDGES = 80;
+        setGraphData({
+          nodes: (rawGraph.nodes || []).slice(0, MAX_GRAPH_NODES),
+          edges: (rawGraph.edges || []).slice(0, MAX_GRAPH_EDGES)
+        });
+      }
+    }, 500);
+
+    // Recharts / Incidents throttle
+    const rechartsFlushTimer = setInterval(() => {
+      if (pendingIncidentRef.current) {
+        const inc = pendingIncidentRef.current;
+        pendingIncidentRef.current = null;
+        setIncidents((prev) => {
+          const filtered = prev.filter(i => i.id !== inc.id);
+          return [inc, ...filtered];
+        });
+        setActiveIncident(inc);
+        if (inc.recommended_action) {
+          setSelectedStrategyForApproval(inc.recommended_action);
+        }
+      }
+    }, 300);
+
     const unsubStatus = wsClient.on('connection_status', (data) => {
       setIsConnected(data.connected);
       if (data.connected) refreshAll();
     });
 
     const unsubInit = wsClient.on('initial_state', (data) => {
-      if (data.events) setEvents(data.events);
+      if (data.events) setEvents(data.events.slice(0, 35));
       if (data.incidents && data.incidents.length > 0) {
         setIncidents(data.incidents);
         const primary = data.incidents.find(i => i.status === 'ACTIVE') || data.incidents[0];
         setActiveIncident(primary);
       }
-      if (data.graph) setGraphData(data.graph);
+      if (data.telemetry_history) {
+        setTelemetryHistory(data.telemetry_history);
+      }
+      if (data.graph) {
+        setGraphData({
+          nodes: (data.graph.nodes || []).slice(0, 50),
+          edges: (data.graph.edges || []).slice(0, 80)
+        });
+      }
       if (data.system_status) setSystemStatus(data.system_status);
     });
 
+    // High-frequency incoming event ingestion into buffer (ZERO direct setState per event)
     const unsubEvent = wsClient.on('new_event', (payload) => {
       if (payload.event) {
-        setEvents((prev) => [payload.event, ...prev.slice(0, 34)]);
+        eventBufferRef.current.push(payload.event);
       }
       if (payload.anomaly && payload.anomaly.classification !== 'NORMAL') {
-        setAnomalies((prev) => ({
-          ...prev,
-          [payload.anomaly.event_id]: payload.anomaly
-        }));
+        anomalyBufferRef.current[payload.anomaly.event_id] = payload.anomaly;
       }
       if (payload.signal) {
-        setLatestSignal(payload.signal);
+        latestSignalRef.current = payload.signal;
       }
     });
 
+    // High-frequency incident creation buffered
     const unsubIncident = wsClient.on('incident_created', (payload) => {
-      const inc = payload.incident;
-      setIncidents((prev) => {
-        const filtered = prev.filter(i => i.id !== inc.id);
-        return [inc, ...filtered];
-      });
-      setActiveIncident(inc);
-      if (payload.recommendation) {
-        setSelectedStrategyForApproval(payload.recommendation);
+      pendingIncidentRef.current = payload.incident;
+    });
+
+    // High-frequency graph updates buffered (React Flow gets <= 2 updates/sec)
+    const unsubGraph = wsClient.on('graph_updated', (rfGraph) => {
+      if (rfGraph?.nodes) {
+        graphBufferRef.current = rfGraph;
       }
     });
 
-    const unsubGraph = wsClient.on('graph_updated', (rfGraph) => {
-      if (rfGraph && rfGraph.nodes) {
-        setGraphData(rfGraph);
+    // Decoupled 1-second telemetry ticks for static Recharts activity chart
+    const unsubTelemetry = wsClient.on('telemetry_tick', (point) => {
+      if (point) {
+        setTelemetryHistory(prev => [...prev.slice(-59), point]);
       }
     });
 
@@ -147,15 +232,20 @@ export default function App() {
     });
 
     return () => {
+      clearInterval(eventFlushTimer);
+      clearInterval(graphFlushTimer);
+      clearInterval(rechartsFlushTimer);
       unsubStatus();
       unsubInit();
       unsubEvent();
       unsubIncident();
       unsubGraph();
+      unsubTelemetry();
       unsubSim();
       unsubApproval();
       unsubContained();
       unsubWorkflow();
+      wsClient.disconnect();
     };
   }, [refreshAll]);
 
@@ -204,6 +294,9 @@ export default function App() {
           metrics={systemStatus?.metrics}
           activeIncident={activeIncident}
         />
+
+        {/* Decoupled Telemetry Activity Rate (Static Recharts, 1-sec aggregation) */}
+        <TelemetryActivityChart telemetryData={telemetryHistory} />
 
         {/* Action Containment Banner (Visible when unmitigated threat is detected) */}
         {isIncidentActive && (

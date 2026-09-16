@@ -47,7 +47,7 @@ function FinancialNodeComponent({ data }) {
   };
 
   return (
-    <div className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-all duration-200 min-w-[100px] max-w-[140px] ${getBorderColor()}`}>
+    <div className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono min-w-[100px] max-w-[140px] ${getBorderColor()}`}>
       <Handle type="target" position={Position.Left} className="w-1.5 h-1.5 !bg-slate-400" />
       
       <div className="flex items-center justify-between space-x-1.5 mb-0.5">
@@ -95,8 +95,11 @@ export default function ThreatGraphView({ graphData, onRefresh, activeIncident }
 
   React.useEffect(() => {
     if (graphData) {
-      setNodes(graphData.nodes || []);
-      setEdges(graphData.edges || []);
+      // Strictly enforce <= 50 visible nodes and ~80 edges
+      const safeNodes = (graphData.nodes || []).slice(0, 50);
+      const safeEdges = (graphData.edges || []).slice(0, 80);
+      setNodes(safeNodes);
+      setEdges(safeEdges);
     }
   }, [graphData]);
 

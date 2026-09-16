@@ -25,12 +25,14 @@ export default function PropagationForecastCard({ forecast, incident }) {
     return `₹${Number(val).toLocaleString('en-IN')}`;
   };
 
-  const chartData = horizons.map(h => ({
-    horizon: h.label,
-    accounts: h.affected_accounts,
-    transactions: h.transactions_at_risk,
-    exposure: h.estimated_exposure / 100000 // In Lakhs for chart readability
-  }));
+  const chartData = React.useMemo(() => {
+    return horizons.map(h => ({
+      horizon: h.label,
+      accounts: h.affected_accounts,
+      transactions: h.transactions_at_risk,
+      exposure: h.estimated_exposure / 100000 // In Lakhs for chart readability
+    }));
+  }, [horizons]);
 
   return (
     <div className="bg-soc-card border border-soc-border rounded-xl p-4 shadow-lg flex flex-col justify-between">
@@ -104,6 +106,7 @@ export default function PropagationForecastCard({ forecast, incident }) {
               strokeWidth={2}
               fillOpacity={1} 
               fill="url(#exposureGradient)" 
+              isAnimationActive={false}
             />
           </AreaChart>
         </ResponsiveContainer>
