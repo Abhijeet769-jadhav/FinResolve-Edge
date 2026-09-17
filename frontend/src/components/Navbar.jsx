@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Zap, RefreshCw, AlertTriangle, ChevronDown, CheckCircle2, Lock } from 'lucide-react';
+import { Shield, Zap, RefreshCw, AlertTriangle, ChevronDown, CheckCircle2, Lock, FlaskConical } from 'lucide-react';
 import { injectAttack } from '../services/api';
 
 export default function Navbar({ isConnected, onAttackTriggered, activeTab, setActiveTab }) {
@@ -8,9 +8,12 @@ export default function Navbar({ isConnected, onAttackTriggered, activeTab, setA
   const [menuOpen, setMenuOpen] = useState(false);
 
   const scenarios = [
-    { id: 'account_takeover', name: 'Scenario 1: Coordinated Account Takeover', desc: 'Rogue device, multi-account probe, OTP fail, large transfer' },
-    { id: 'mule_network', name: 'Scenario 2: Mule Network Expansion', desc: 'Many accounts routing rapid payments to concentrated recipient' },
-    { id: 'merchant_attack', name: 'Scenario 3: Merchant/Payment Exploit', desc: 'Payment failures & retry explosion across POS terminals' }
+    { id: 'account_takeover', name: 'Scenario 1: Coordinated Account Takeover', desc: 'Rogue device, multi-account probe, OTP fail, ₹18.5L transfer' },
+    { id: 'mule_network', name: 'Scenario 2: Mule Network Expansion', desc: 'Rapid payments funneling into collector node REC-MULE-88' },
+    { id: 'gateway_outage', name: 'Scenario 3: Regional Gateway Outage', desc: 'Cluster of 504 timeouts triggering operational failover & circuit breaker' },
+    { id: 'weak_signals', name: 'Scenario 4: Weak Signals Progression', desc: '5 compound low-risk probes escalating to Emerging Coordinated Nexus' },
+    { id: 'coordinated_fraud', name: 'Scenario 5: Coordinated Fraud Ring', desc: 'Multi-entity synchronized velocity spike across merchant endpoints' },
+    { id: 'credential_stuffing', name: 'Scenario 6: Credential Stuffing Blast', desc: 'Distributed multi-IP authentication burst causing lockouts' }
   ];
 
   const handleSimulateAttack = async (scenarioId) => {
@@ -86,6 +89,17 @@ export default function Navbar({ isConnected, onAttackTriggered, activeTab, setA
               }`}
             >
               System & Edge
+            </button>
+            <button
+              onClick={() => setActiveTab('testlab')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                activeTab === 'testlab' 
+                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-sm font-semibold' 
+                  : 'text-cyan-400 hover:text-cyan-200 hover:bg-slate-800'
+              }`}
+            >
+              <FlaskConical className="w-3.5 h-3.5 text-cyan-300" />
+              <span>TEST LAB</span>
             </button>
           </nav>
 

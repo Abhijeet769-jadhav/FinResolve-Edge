@@ -23,6 +23,7 @@ class AttackSimulationEngine:
         current_exposure = forecast.horizons[0].estimated_exposure
 
         # Dynamic simulation model parameters based on threat type
+        is_operational = getattr(incident, 'is_operational', False) or any(k in incident.threat_type for k in ["Gateway", "Aggregator", "Degradation", "Outage", "Merchant Failure"])
         is_ato = "Takeover" in incident.threat_type
         is_mule = "Mule" in incident.threat_type
         is_merchant = "Merchant" in incident.threat_type
@@ -31,7 +32,7 @@ class AttackSimulationEngine:
         strat_no_action = SimulationResult(
             strategy="NO_ACTION",
             label="No Intervention (Passive Monitoring)",
-            description="Allow current traffic patterns without containment. Baseline exposure accumulates exponentially.",
+            description="Allow current traffic patterns without containment. Cascading timeouts and failures accumulate unchecked." if is_operational else "Allow current traffic patterns without containment. Baseline exposure accumulates exponentially.",
             estimated_affected_accounts=base_accounts,
             estimated_transactions_at_risk=base_txns,
             estimated_financial_exposure=base_exposure,
@@ -39,6 +40,72 @@ class AttackSimulationEngine:
             customer_friction="LOW",
             containment_score=0.0
         )
+
+        if is_operational:
+            # Operational Playbook Strategies
+            strat_reroute = SimulationResult(
+                strategy="REROUTE_TRAFFIC",
+                label="Reroute Payment Traffic (Secondary Ingress)",
+                description="Immediately reroute transaction flow from degraded gateway to healthy backup settlement pipelines.",
+                estimated_affected_accounts=math.ceil(base_accounts * 0.25),
+                estimated_transactions_at_risk=math.ceil(base_txns * 0.20),
+                estimated_financial_exposure=round(base_exposure * 0.18, 2),
+                propagation="LOW",
+                customer_friction="LOW",
+                containment_score=89.5
+            )
+
+            strat_circuit = SimulationResult(
+                strategy="CIRCUIT_BREAKER",
+                label="Engage Adaptive Circuit Breaker",
+                description="Temporarily rate-limit non-essential traffic and isolate failing aggregator endpoints to halt cascade.",
+                estimated_affected_accounts=math.ceil(base_accounts * 0.35),
+                estimated_transactions_at_risk=math.ceil(base_txns * 0.30),
+                estimated_financial_exposure=round(base_exposure * 0.25, 2),
+                propagation="LOW",
+                customer_friction="MEDIUM",
+                containment_score=84.0
+            )
+
+            strat_noc = SimulationResult(
+                strategy="ALERT_OPERATIONS",
+                label="Escalate to NOC & Health Check Probe",
+                description="Dispatch urgent P1 alert to Site Reliability Engineering with automated health probe telemetry.",
+                estimated_affected_accounts=math.ceil(base_accounts * 0.50),
+                estimated_transactions_at_risk=math.ceil(base_txns * 0.45),
+                estimated_financial_exposure=round(base_exposure * 0.40, 2),
+                propagation="MEDIUM",
+                customer_friction="LOW",
+                containment_score=68.0
+            )
+
+            strat_combined_op = SimulationResult(
+                strategy="COMBINED",
+                label="Coordinated Resilience (Reroute + Breaker + NOC)",
+                description="Multi-layered operational response: Instant secondary reroute, edge circuit breaker, and automated NOC alert.",
+                estimated_affected_accounts=current_acc,
+                estimated_transactions_at_risk=current_txn + 1,
+                estimated_financial_exposure=round(current_exposure + 2000, 2),
+                propagation="LOW",
+                customer_friction="LOW",
+                containment_score=98.2
+            )
+
+            all_strategies = [
+                strat_no_action,
+                strat_reroute,
+                strat_circuit,
+                strat_noc,
+                strat_combined_op
+            ]
+            best_strat = max(all_strategies, key=lambda s: s.containment_score)
+            best_strat.is_recommended = True
+            exp_red = round(((base_exposure - best_strat.estimated_financial_exposure) / max(base_exposure, 1)) * 100, 1)
+            best_strat.recommendation_reason = (
+                f"Mitigates {exp_red}% of downtime exposure (protecting ₹{base_exposure - best_strat.estimated_financial_exposure:,.0f}), "
+                f"restores service availability while maintaining minimal customer friction."
+            )
+            return all_strategies
 
         # Strategy 2: BLOCK_DEVICE
         # Highly effective for ATO with single device, less effective if mule or distributed

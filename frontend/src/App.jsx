@@ -12,6 +12,7 @@ import IncidentDetailModal from './components/IncidentDetailModal';
 import EdgeNodesMap from './components/EdgeNodesMap';
 import SystemStatusPanel from './components/SystemStatusPanel';
 import TelemetryActivityChart from './components/TelemetryActivityChart';
+import FinResolveTestLab from './components/FinResolveTestLab';
 
 import { wsClient } from './services/websocket';
 import { 
@@ -422,6 +423,17 @@ export default function App() {
               latestSignal={latestSignal}
             />
           </div>
+        )}
+
+        {/* Tab 4: Unified Test Lab (Phase 1-5 Testing Suite) */}
+        {activeTab === 'testlab' && (
+          <FinResolveTestLab 
+            activeIncident={activeIncident}
+            onAttackTriggered={(scenarioId) => {
+              setActiveStageId(1);
+            }}
+            telemetryData={telemetryHistory[telemetryHistory.length - 1]}
+          />
         )}
 
       </main>

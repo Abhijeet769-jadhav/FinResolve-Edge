@@ -21,12 +21,28 @@ class AnomalyAndIncidentEngine:
         self.account_locations = defaultdict(set)
         self.account_recipients = defaultdict(set)
 
-        # Edge node status tracking
+        # Global Edge Benchmark Funnel Counters (User Architectural Directive)
+        self.edge_counters = {
+            "events_received": 0,
+            "events_filtered": 0,
+            "events_forwarded": 0,
+            "events_processed": 0,
+            "signals_correlated": 0,
+            "incidents_formed": 0,
+            "critical_incidents": 0
+        }
+
+        # Edge node status tracking & offline simulation buffer
         self.edge_node_stats = {
             node: {
-                "status": "ONLINE",
+                "status": "ONLINE",  # ONLINE, OFFLINE, BUFFERING, RECONNECTED, SYNCING
+                "events_received": 0,
+                "events_filtered": 0,
+                "events_forwarded": 0,
                 "signals_processed": 0,
                 "anomalies_detected": 0,
+                "buffered_count": 0,
+                "local_buffer": [],
                 "last_active": datetime.utcnow().isoformat(),
                 "latency_ms": 12 + (hash(node) % 8)
             }
@@ -40,6 +56,33 @@ class AnomalyAndIncidentEngine:
         # Anomaly reports history
         self.anomaly_reports: List[AnomalyReport] = []
 
+    def disconnect_edge_node(self, node_name: str) -> Dict[str, Any]:
+        """Simulates edge node disconnection from central network."""
+        if node_name in self.edge_node_stats:
+            self.edge_node_stats[node_name]["status"] = "OFFLINE"
+            return {"node": node_name, "status": "OFFLINE", "message": f"{node_name} disconnected. Local detection active in buffer mode."}
+        return {"error": "Node not found"}
+
+    def reconnect_and_sync_edge_node(self, node_name: str) -> Dict[str, Any]:
+        """Simulates edge node reconnection and batch synchronization."""
+        if node_name in self.edge_node_stats:
+            stats = self.edge_node_stats[node_name]
+            buffered_count = len(stats.get("local_buffer", []))
+            stats["status"] = "SYNCING"
+            # Flush buffered events into forwarded count
+            stats["events_forwarded"] += buffered_count
+            self.edge_counters["events_forwarded"] += buffered_count
+            stats["local_buffer"] = []
+            stats["buffered_count"] = 0
+            stats["status"] = "ONLINE"
+            return {
+                "node": node_name,
+                "status": "ONLINE",
+                "synced_events": buffered_count,
+                "message": f"Successfully synchronized {buffered_count} buffered events from {node_name} to central engine."
+            }
+        return {"error": "Node not found"}
+
     def evaluate_event(self, event: FinancialEvent) -> Tuple[AnomalyReport, Optional[EdgeNodeSignal], Optional[Incident]]:
         """
         Evaluates a single financial event:
@@ -52,6 +95,16 @@ class AnomalyAndIncidentEngine:
         loc = event.location
         ts = event.timestamp
         evt_type = event.type.value if hasattr(event.type, "value") else str(event.type)
+
+        # Update global benchmark counters (User Architectural Directive)
+        self.edge_counters["events_received"] += 1
+        self.edge_counters["events_processed"] += 1
+
+        is_offline = False
+        if loc in self.edge_node_stats:
+            self.edge_node_stats[loc]["events_received"] += 1
+            self.edge_node_stats[loc]["last_active"] = ts
+            is_offline = (self.edge_node_stats[loc]["status"] == "OFFLINE")
 
         # Update local tracking with strict bounds to prevent memory accumulation
         self.device_accounts[dev].add(acc)
@@ -68,16 +121,10 @@ class AnomalyAndIncidentEngine:
         if evt_type == "OTP_FAILURE":
             self.account_otp_failures[acc] += 1
         elif evt_type == "LOGIN":
-            # Successful login resets failed OTP streak if low, or notes circumvention
             pass
 
         if event.recipient_id:
             self.account_recipients[acc].add(event.recipient_id)
-
-        # Edge node stats update
-        if loc in self.edge_node_stats:
-            self.edge_node_stats[loc]["signals_processed"] += 1
-            self.edge_node_stats[loc]["last_active"] = ts
 
         # --- Rule Evaluation ---
         factors: List[AnomalyFactor] = []
@@ -146,6 +193,29 @@ class AnomalyAndIncidentEngine:
             factors.append(AnomalyFactor(rule="GEO_VELOCITY_ANOMALY", score_contribution=contrib, description=f"Account accessed across {loc_count} distinct regions"))
             reasons.append(f"Multiple locations accessed ({', '.join(self.account_locations[acc])})")
 
+        # Rule 7: Operational API / Gateway Error (+45)
+        if evt_type == "API_ERROR":
+            contrib = 45.0
+            raw_score += contrib
+            factors.append(AnomalyFactor(rule="REGIONAL_GATEWAY_TIMEOUT", score_contribution=contrib, description=f"Gateway timeout error 504 on node {loc}"))
+            reasons.append(f"Regional Gateway 504 degradation timeout on {loc}")
+
+        # Rule 8: Recipient Concentration Cluster (+25)
+        if event.recipient_id:
+            rec_accounts = [a for a, recs in self.account_recipients.items() if event.recipient_id in recs]
+            if len(rec_accounts) >= 3:
+                contrib = 25.0
+                raw_score += contrib
+                factors.append(AnomalyFactor(rule="RECIPIENT_CONCENTRATION_CLUSTER", score_contribution=contrib, description=f"Recipient {event.recipient_id} targeted by {len(rec_accounts)} distinct accounts"))
+                reasons.append(f"High-density recipient funneling ({len(rec_accounts)} accounts)")
+
+        # Rule 9: Micro-deposit probe testing (+15)
+        if 0 < event.amount <= 250 and (evt_type == "TRANSACTION") and (linked_acc_count >= 2 or event.recipient_id):
+            contrib = 15.0
+            raw_score += contrib
+            factors.append(AnomalyFactor(rule="MICRO_DEPOSIT_VALIDATION_PROBE", score_contribution=contrib, description=f"Small probe amount ₹{event.amount:.0f} testing account access"))
+            reasons.append("Micro-deposit probe transfer detected")
+
         # Normalize score to 0 - 100
         risk_score = min(100.0, round(raw_score, 1))
 
@@ -158,6 +228,28 @@ class AnomalyAndIncidentEngine:
             classification = "ELEVATED"
         else:
             classification = "NORMAL"
+
+        # Track edge filtering funnel: Normal events filtered locally; suspicious forwarded
+        if classification == "NORMAL":
+            self.edge_counters["events_filtered"] += 1
+            if loc in self.edge_node_stats:
+                self.edge_node_stats[loc]["events_filtered"] += 1
+        else:
+            if is_offline:
+                if loc in self.edge_node_stats:
+                    self.edge_node_stats[loc]["buffered_count"] += 1
+                    self.edge_node_stats[loc]["local_buffer"].append({
+                        "event_id": event.event_id,
+                        "risk_score": risk_score,
+                        "classification": classification,
+                        "timestamp": ts
+                    })
+                    if len(self.edge_node_stats[loc]["local_buffer"]) > 500:
+                        self.edge_node_stats[loc]["local_buffer"].pop(0)
+            else:
+                self.edge_counters["events_forwarded"] += 1
+                if loc in self.edge_node_stats:
+                    self.edge_node_stats[loc]["events_forwarded"] += 1
 
         report = AnomalyReport(
             event_id=event.event_id,
@@ -175,9 +267,12 @@ class AnomalyAndIncidentEngine:
 
         # Cryptographic edge signal abstraction
         signal = None
-        if risk_score >= 40:
+        if risk_score >= 40 and not is_offline:
             if loc in self.edge_node_stats:
                 self.edge_node_stats[loc]["anomalies_detected"] += 1
+                self.edge_node_stats[loc]["signals_processed"] += 1
+
+            self.edge_counters["signals_correlated"] += 1
 
             # Deterministic SHA-384 hash of the metadata
             payload_data = f"{loc}:{dev}:{acc}:{risk_score}:{ts}"
@@ -198,8 +293,10 @@ class AnomalyAndIncidentEngine:
 
         # Incident Formation Logic
         incident = None
-        if risk_score >= 60:
+        if risk_score >= 60 and not is_offline:
             incident = self._correlate_or_create_incident(event, report, signal)
+
+        return report, signal, incident
 
         return report, signal, incident
 
@@ -215,6 +312,7 @@ class AnomalyAndIncidentEngine:
         rec = event.recipient_id
         mer = event.merchant_id
         loc = event.location
+        evt_type = event.type.value if hasattr(event.type, 'value') else str(event.type)
 
         # Check for matching active incident
         target_incident: Optional[Incident] = None
@@ -271,9 +369,15 @@ class AnomalyAndIncidentEngine:
             self.active_incident_counter += 1
             inc_id = f"INC-{self.active_incident_counter}"
 
-            # Classify threat type
-            if rec and len(self.device_accounts[dev]) > 1:
-                threat_type = "Coordinated Account Takeover"
+            # Classify threat type (Security vs. Operational vs. Predictive Emerging)
+            if evt_type == "API_ERROR":
+                threat_type = "Regional Payment Gateway Degradation"
+            elif "MER" in str(mer or "") or "PAYLINK" in str(mer or ""):
+                threat_type = "Merchant Aggregator Failure / Decline Spike"
+            elif "GHOST" in dev or "SHADOW" in str(rec or ""):
+                threat_type = "Emerging Coordinated Nexus (Weak Signals Accumulator)"
+            elif rec and len(self.device_accounts[dev]) > 1:
+                threat_type = "Coordinated Account Takeover (Nexus Detected)"
             elif rec:
                 threat_type = "Mule Network Expansion"
             elif mer:
@@ -300,6 +404,10 @@ class AnomalyAndIncidentEngine:
                 timeline=[timeline_entry]
             )
             self.incidents[inc_id] = new_incident
+            self.edge_counters["incidents_formed"] += 1
+            if new_incident.severity == "CRITICAL":
+                self.edge_counters["critical_incidents"] += 1
+
             return new_incident
 
     def get_incident(self, inc_id: str) -> Optional[Incident]:
@@ -312,6 +420,7 @@ class AnomalyAndIncidentEngine:
     def get_system_status_data(self) -> Dict[str, Any]:
         return {
             "edge_nodes": self.edge_node_stats,
+            "edge_counters": self.edge_counters,
             "services": {
                 "Event Stream": "ONLINE",
                 "Graph Engine": "ONLINE",
