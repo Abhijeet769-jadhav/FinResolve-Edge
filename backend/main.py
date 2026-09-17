@@ -19,6 +19,9 @@ from simulation_engine import simulation_engine
 from response_engine import response_engine
 from event_generator import event_generator
 from telemetry import telemetry_tracker
+from pqc_lab import pqc_lab
+from adapters import amlsim_adapter, paysim_adapter
+from load_test_engine import load_test_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("finresolve.main")
@@ -34,6 +37,9 @@ async def telemetry_ticker_loop():
             incidents = anomaly_engine.get_all_incidents()
             active_inc = next((i for i in incidents if i.status == "ACTIVE"), None)
             point = telemetry_tracker.tick(active_incident=active_inc)
+            point["edge_counters"] = anomaly_engine.edge_counters
+            if load_test_engine.is_running:
+                point["load_test"] = load_test_engine.get_status()
             await ws_manager.broadcast("telemetry_tick", point)
         except asyncio.CancelledError:
             break
@@ -232,6 +238,114 @@ async def get_system_status():
     }
     data["telemetry_history"] = telemetry_tracker.history
     return data
+
+# ==========================================
+# PHASE 2: EDGE SIMULATION ENDPOINTS
+# ==========================================
+@app.get("/api/edge/nodes")
+async def get_edge_nodes():
+    """Returns real-time status, buffers, and metrics for all edge nodes."""
+    return anomaly_engine.edge_node_stats
+
+@app.get("/api/edge/counters")
+async def get_edge_counters():
+    """Returns the 4 global Edge funnel counters."""
+    return anomaly_engine.edge_counters
+
+@app.post("/api/edge/{node_name}/disconnect")
+async def disconnect_edge_node(node_name: str):
+    """Simulates edge node disconnection, buffering events locally."""
+    res = anomaly_engine.disconnect_edge_node(node_name)
+    await ws_manager.broadcast("edge_node_updated", res)
+    return res
+
+@app.post("/api/edge/{node_name}/reconnect")
+async def reconnect_edge_node(node_name: str):
+    """Simulates edge node reconnection, flushing buffered events to central."""
+    res = anomaly_engine.reconnect_and_sync_edge_node(node_name)
+    await ws_manager.broadcast("edge_node_updated", res)
+    return res
+
+# ==========================================
+# PHASE 3: POST-QUANTUM CRYPTOGRAPHY LAB
+# ==========================================
+@app.get("/api/pqc/info")
+async def get_pqc_info():
+    """Returns algorithm suite details (ML-DSA-65, ML-KEM-768, AES-256-GCM, SHA-384)."""
+    return pqc_lab.algorithm_suite
+
+@app.post("/api/pqc/test-valid")
+async def test_pqc_valid(amount: float = Query(10000.0)):
+    """Runs end-to-end PQC verification on an untampered transaction."""
+    res = pqc_lab.run_valid_test(amount=amount)
+    return res
+
+@app.post("/api/pqc/test-tamper")
+async def test_pqc_tamper(original_amount: float = Query(10000.0), tampered_amount: float = Query(1000000.0)):
+    """Runs PQC tamper test where amount is altered in-flight (₹10,000 -> ₹1,000,000)."""
+    res = pqc_lab.run_tamper_test(original_amount=original_amount, tampered_amount=tampered_amount)
+    return res
+
+# ==========================================
+# PHASE 4: DATASET ADAPTERS (AMLSim & PaySim)
+# ==========================================
+async def _replay_adapter_stream(events: List[Any], delay_sec: float = 0.08):
+    for evt in events:
+        await event_generator.process_and_broadcast_event(evt, is_attack=False, broadcast_graph=True)
+        await asyncio.sleep(delay_sec)
+
+@app.post("/api/adapters/amlsim/replay")
+async def replay_amlsim(pattern: str = Query("fan_in"), count: int = Query(20)):
+    """Replays synthetic IBM AMLSim topology (fan_in, cycle, scatter_gather, normal)."""
+    events = amlsim_adapter.generate_synthetic_stream(pattern=pattern, count=count)
+    asyncio.create_task(_replay_adapter_stream(events))
+    return {
+        "status": "REPLAY_STARTED",
+        "dataset": "IBM_AMLSim",
+        "pattern": pattern,
+        "events_count": len(events),
+        "schema_isolation": "Strict: Converted to FinancialEvent without leaking external fields"
+    }
+
+@app.post("/api/adapters/paysim/replay")
+async def replay_paysim(pattern: str = Query("transfer_cashout_drain"), count: int = Query(20)):
+    """Replays synthetic PaySim mobile money fraud or payment burst."""
+    events = paysim_adapter.generate_synthetic_stream(pattern=pattern, count=count)
+    asyncio.create_task(_replay_adapter_stream(events))
+    return {
+        "status": "REPLAY_STARTED",
+        "dataset": "PaySim_MobileMoney",
+        "pattern": pattern,
+        "events_count": len(events),
+        "schema_isolation": "Strict: Converted to FinancialEvent without leaking external fields"
+    }
+
+# ==========================================
+# PHASE 5: LOAD TESTING ENGINE
+# ==========================================
+@app.post("/api/load-test/start")
+async def start_load_test(tier: int = Query(100)):
+    """Starts high-throughput load test at tier (10, 100, 1000, 5000, 10000 evts/s)."""
+    load_test_engine.start(tier_eps=tier)
+    return {
+        "status": "LOAD_TEST_STARTED",
+        "tier_eps": tier,
+        "metrics": load_test_engine.get_status()
+    }
+
+@app.post("/api/load-test/stop")
+async def stop_load_test():
+    """Stops the active load test."""
+    load_test_engine.stop()
+    return {
+        "status": "LOAD_TEST_STOPPED",
+        "final_metrics": load_test_engine.get_status()
+    }
+
+@app.get("/api/load-test/metrics")
+async def get_load_test_metrics():
+    """Returns current load test throughput, latency percentiles, and Fraud Evaluation Metrics."""
+    return load_test_engine.get_status()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

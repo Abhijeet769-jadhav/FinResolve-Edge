@@ -127,7 +127,7 @@ class ResponseActionRequest(BaseModel):
     analyst_note: Optional[str] = None
 
 class InjectAttackRequest(BaseModel):
-    scenario: str = "account_takeover" # account_takeover, mule_network, merchant_attack
+    scenario: str = "account_takeover" # account_takeover, mule_network, coordinated_fraud, recipient_attack, credential_stuffing, gateway_outage, merchant_failure, mixed_attack, weak_signals, normal
 
 class WorkflowStage(BaseModel):
     stage_id: int
