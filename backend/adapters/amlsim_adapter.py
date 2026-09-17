@@ -46,7 +46,7 @@ class AMLSimAdapter:
         ip = record.get("ip", f"10.50.{(device_seed % 250) + 1}.{random.randint(10, 240)}")
 
         step = record.get("step", 1)
-        event_id = f"AML-{step}-{uuid.uuid4().hex[:8]}"
+        event_id = f"AML-{step}-{uuid.uuid4().hex[:12].upper()}"
 
         return FinancialEvent(
             event_id=event_id,

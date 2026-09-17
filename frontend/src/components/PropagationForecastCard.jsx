@@ -1,20 +1,75 @@
-import React from 'react';
-import { TrendingUp, AlertTriangle, ShieldCheck, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { TrendingUp, AlertTriangle, ShieldCheck, ArrowRight, Zap, Loader2 } from 'lucide-react';
 import { 
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid 
 } from 'recharts';
+import { fetchForecast, injectAttack } from '../services/api';
 
 export default function PropagationForecastCard({ forecast, incident }) {
-  if (!forecast && !incident?.propagation_forecast) {
+  const [localForecast, setLocalForecast] = useState(forecast || incident?.propagation_forecast || null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isInjecting, setIsInjecting] = useState(false);
+
+  useEffect(() => {
+    if (forecast) {
+      setLocalForecast(forecast);
+    } else if (incident?.propagation_forecast) {
+      setLocalForecast(incident.propagation_forecast);
+    } else if (incident?.id) {
+      setIsLoading(true);
+      fetchForecast(incident.id)
+        .then(f => {
+          if (f) setLocalForecast(f);
+        })
+        .catch(err => console.error("Failed to load forecast:", err))
+        .finally(() => setIsLoading(false));
+    } else {
+      setLocalForecast(null);
+    }
+  }, [forecast, incident?.id, incident?.propagation_forecast]);
+
+  const handleQuickInject = async () => {
+    setIsInjecting(true);
+    try {
+      await injectAttack('account_takeover');
+    } catch (e) {
+      console.error('Failed to trigger attack:', e);
+    } finally {
+      setTimeout(() => setIsInjecting(false), 2000);
+    }
+  };
+
+  const effectiveForecast = localForecast || forecast || incident?.propagation_forecast;
+
+  if (!effectiveForecast) {
     return (
-      <div className="bg-soc-card border border-soc-border rounded-xl p-4 flex flex-col justify-center items-center text-slate-500 font-mono text-xs h-full min-h-[260px]">
-        <TrendingUp className="w-8 h-8 text-slate-600 mb-2 animate-pulse" />
-        <span>Awaiting threat data to compute propagation forecast...</span>
+      <div className="bg-soc-card border border-soc-border rounded-xl p-6 flex flex-col justify-center items-center text-slate-400 font-mono text-xs h-full min-h-[260px] text-center shadow-lg">
+        {isLoading ? (
+          <>
+            <Loader2 className="w-8 h-8 text-blue-400 mb-3 animate-spin" />
+            <span className="text-slate-200 font-bold mb-1">Evaluating Graph Topology...</span>
+            <span className="text-[11px] text-slate-500">Computing dynamic multi-hop propagation trajectory</span>
+          </>
+        ) : (
+          <>
+            <TrendingUp className="w-8 h-8 text-slate-600 mb-2" />
+            <span className="text-slate-200 font-bold mb-1">Awaiting Threat Data</span>
+            <p className="text-[11px] text-slate-400 max-w-sm mb-4">
+              Select an active incident or trigger a synthetic attack scenario to compute dynamic multi-hop financial exposure forecasts.
+            </p>
+            <button
+              onClick={handleQuickInject}
+              disabled={isInjecting}
+              className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md shadow-blue-900/30 active:scale-95 disabled:opacity-50"
+            >
+              <Zap className={`w-3.5 h-3.5 ${isInjecting ? 'animate-bounce' : ''}`} />
+              <span>{isInjecting ? 'INJECTING ATTACK...' : 'INJECT ATTACK TO FORECAST'}</span>
+            </button>
+          </>
+        )}
       </div>
     );
   }
-
-  const effectiveForecast = forecast || incident.propagation_forecast;
   const horizons = effectiveForecast.horizons || [];
   const isContained = incident?.status === 'CONTAINED';
 
@@ -25,14 +80,12 @@ export default function PropagationForecastCard({ forecast, incident }) {
     return `₹${Number(val).toLocaleString('en-IN')}`;
   };
 
-  const chartData = React.useMemo(() => {
-    return horizons.map(h => ({
-      horizon: h.label,
-      accounts: h.affected_accounts,
-      transactions: h.transactions_at_risk,
-      exposure: h.estimated_exposure / 100000 // In Lakhs for chart readability
-    }));
-  }, [horizons]);
+  const chartData = horizons.map(h => ({
+    horizon: h.label,
+    accounts: h.affected_accounts,
+    transactions: h.transactions_at_risk,
+    exposure: h.estimated_exposure / 100000 // In Lakhs for chart readability
+  }));
 
   return (
     <div className="bg-soc-card border border-soc-border rounded-xl p-4 shadow-lg flex flex-col justify-between">
@@ -60,22 +113,30 @@ export default function PropagationForecastCard({ forecast, incident }) {
         <span className="text-amber-300 font-bold">{effectiveForecast.primary_propagation_vector}</span>
       </div>
 
-      {/* 4 Horizon Milestones */}
+      {/* 4 Horizon Milestones with Progression Vector */}
       <div className="grid grid-cols-4 gap-2 mb-3 font-mono text-center">
-        {horizons.map((h) => (
+        {horizons.map((h, idx) => (
           <div 
             key={h.label} 
-            className={`p-2 rounded-lg border flex flex-col justify-between ${
-              h.label === 'NOW' ? 'bg-soc-bg border-blue-500/50' :
+            className={`p-2.5 rounded-lg border flex flex-col justify-between relative transition-all ${
+              h.label === 'NOW' ? 'bg-soc-bg border-blue-500/70 shadow-sm shadow-blue-900/30' :
               isContained ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-200' :
+              idx === horizons.length - 1 ? 'bg-rose-950/25 border-rose-600/50 shadow-sm shadow-rose-900/30' :
               'bg-soc-bg border-soc-border/70'
             }`}
           >
-            <span className="text-[10px] text-slate-400 font-semibold">{h.label}</span>
+            <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold mb-1">
+              <span>{h.label}</span>
+              {idx > 0 && !isContained && (
+                <span className="text-[9px] text-rose-400 font-normal">+{idx * 30}%</span>
+              )}
+            </div>
             <div className="text-base font-bold text-slate-100 my-0.5">
               {h.affected_accounts} <span className="text-[10px] font-normal text-slate-400">accs</span>
             </div>
-            <div className="text-[10px] text-rose-300 font-semibold">
+            <div className={`text-[11px] font-bold ${
+              isContained ? 'text-emerald-300' : idx === horizons.length - 1 ? 'text-rose-400 font-extrabold' : 'text-rose-300'
+            }`}>
               {formatINR(h.estimated_exposure)}
             </div>
           </div>

@@ -2,6 +2,12 @@ from enum import Enum
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
+import uuid
+import threading
+from collections import defaultdict
+
+_EDGE_SEQUENCE_LOCK = threading.Lock()
+_EDGE_SEQUENCES = defaultdict(int)
 
 class EventType(str, Enum):
     LOGIN = "LOGIN"
@@ -15,17 +21,28 @@ class EventType(str, Enum):
     API_ERROR = "API_ERROR"
 
 class FinancialEvent(BaseModel):
-    event_id: str
-    timestamp: str
+    event_id: str = Field(default_factory=lambda: f"EVT-{uuid.uuid4().hex[:12].upper()}")
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     type: EventType
     account_id: str
     device_id: str
     merchant_id: Optional[str] = None
     recipient_id: Optional[str] = None
     amount: float = 0.0
-    location: str
-    ip: str
+    location: str = "Mumbai"
+    ip: str = "127.0.0.1"
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    edge_id: Optional[str] = None
+    sequence_number: Optional[int] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.edge_id:
+            loc = self.location.strip().replace(" ", "-").upper() if self.location else "MUMBAI"
+            self.edge_id = f"EDGE-{loc}"
+        if self.sequence_number is None:
+            with _EDGE_SEQUENCE_LOCK:
+                _EDGE_SEQUENCES[self.edge_id] += 1
+                self.sequence_number = _EDGE_SEQUENCES[self.edge_id]
 
 class EdgeNodeSignal(BaseModel):
     signal_id: str
@@ -121,10 +138,12 @@ class SimulateRequest(BaseModel):
 
 class ResponseActionRequest(BaseModel):
     incident_id: str
-    action_type: str # APPROVE or REJECT
+    action_type: str = "APPROVE" # APPROVE or REJECT
     strategy: str
     target_entities: List[str] = Field(default_factory=list)
     analyst_note: Optional[str] = None
+    source: Optional[str] = "simulator" # "simulator", "soc", "testlab", "attack_trigger"
+    auto_spawn_next: Optional[bool] = True
 
 class InjectAttackRequest(BaseModel):
     scenario: str = "account_takeover" # account_takeover, mule_network, coordinated_fraud, recipient_attack, credential_stuffing, gateway_outage, merchant_failure, mixed_attack, weak_signals, normal

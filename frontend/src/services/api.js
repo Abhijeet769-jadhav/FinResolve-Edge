@@ -12,9 +12,39 @@ export async function fetchEvents(limit = 50) {
   return res.json();
 }
 
+export async function fetchStreamStatus() {
+  const res = await fetch(`${API_BASE}/stream/status`);
+  if (!res.ok) throw new Error('Failed to fetch stream status');
+  return res.json();
+}
+
+export async function resumeStream() {
+  const res = await fetch(`${API_BASE}/stream/resume`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to resume stream');
+  return res.json();
+}
+
+export async function pauseStream() {
+  const res = await fetch(`${API_BASE}/stream/pause`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to pause stream');
+  return res.json();
+}
+
+export async function injectStreamBatch(count = 15) {
+  const res = await fetch(`${API_BASE}/stream/inject-batch?count=${count}`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to inject stream batch');
+  return res.json();
+}
+
 export async function fetchIncidents() {
   const res = await fetch(`${API_BASE}/incidents`);
   if (!res.ok) throw new Error('Failed to fetch incidents');
+  return res.json();
+}
+
+export async function resetIncidents() {
+  const res = await fetch(`${API_BASE}/incidents/reset`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to reset incidents');
   return res.json();
 }
 
@@ -53,7 +83,7 @@ export async function runSimulation(incidentId, horizon = '60m', strategy = null
   return res.json();
 }
 
-export async function approveResponse(incidentId, strategy, analystNote = '') {
+export async function approveResponse(incidentId, strategy, analystNote = '', source = 'simulator', autoSpawnNext = true) {
   const res = await fetch(`${API_BASE}/response/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,7 +91,9 @@ export async function approveResponse(incidentId, strategy, analystNote = '') {
       incident_id: incidentId,
       action_type: 'APPROVE',
       strategy,
-      analyst_note: analystNote
+      analyst_note: analystNote,
+      source,
+      auto_spawn_next: autoSpawnNext
     })
   });
   if (!res.ok) throw new Error('Approval execution failed');
@@ -174,4 +206,18 @@ export async function fetchLoadTestMetrics() {
   if (!res.ok) throw new Error('Failed to fetch load test metrics');
   return res.json();
 }
+
+// Replay Attack Feature
+export async function fetchIncidentReplaySteps(incidentId) {
+  const res = await fetch(`${API_BASE}/incidents/${encodeURIComponent(incidentId)}/replay-steps`);
+  if (!res.ok) throw new Error(`Failed to fetch replay steps for incident ${incidentId}`);
+  return res.json();
+}
+
+export async function replayIncidentStep(incidentId, stepIndex) {
+  const res = await fetch(`${API_BASE}/incidents/${encodeURIComponent(incidentId)}/replay-step/${stepIndex}`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to replay step ${stepIndex}`);
+  return res.json();
+}
+
 
