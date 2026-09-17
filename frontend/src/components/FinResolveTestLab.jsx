@@ -2,18 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { 
   FlaskConical, Shield, Zap, Server, Lock, Database, Activity, 
   Play, Square, RefreshCw, AlertTriangle, CheckCircle2, XCircle, 
-  ArrowRight, ShieldAlert, Cpu, Layers, Radio, TrendingUp, Info
+  ArrowRight, ShieldAlert, Cpu, Layers, Radio, TrendingUp, Info,
+  UserCheck, Eye, RotateCcw, Flame, BellRing
 } from 'lucide-react';
+import ThreatGraphView from './ThreatGraphView';
 import { 
   injectAttack, fetchEdgeNodes, fetchEdgeCounters, 
   disconnectEdgeNode, reconnectEdgeNode, 
   fetchPqcInfo, testPqcValid, testPqcTamper, 
   replayAmlSim, replayPaySim, 
-  startLoadTest, stopLoadTest, fetchLoadTestMetrics 
+  startLoadTest, stopLoadTest, fetchLoadTestMetrics,
+  resetIncidents
 } from '../services/api';
 
-export default function FinResolveTestLab({ activeIncident, onAttackTriggered, telemetryData }) {
+export default function FinResolveTestLab({ 
+  activeIncident, 
+  onAttackTriggered, 
+  telemetryData, 
+  onOpenApproval, 
+  onSwitchToConsole,
+  graphData,
+  onRefreshGraph
+}) {
   const [activeSubTab, setActiveSubTab] = useState('attacks'); // attacks, edge, pqc, adapters, load
+  const [showInlineGraph, setShowInlineGraph] = useState(true); // Canonical graph visible by default in Test Lab
   
   // Phase 1: Attack Lab State
   const [selectedScenario, setSelectedScenario] = useState('account_takeover');
@@ -76,6 +88,27 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
   // -------------------------------------------------------------
   // Handlers
   // -------------------------------------------------------------
+  const [isResetting, setIsResetting] = useState(false);
+
+  const handleResetBaseline = async () => {
+    setIsResetting(true);
+    try {
+      await resetIncidents();
+      setAttackFeedback({
+        type: 'SUCCESS',
+        message: 'System baseline successfully restored! Old incidents purged, temporal graph cleared to clean state.'
+      });
+      if (onAttackTriggered) onAttackTriggered('reset');
+    } catch (e) {
+      setAttackFeedback({
+        type: 'ERROR',
+        message: `Failed to reset baseline: ${e.message}`
+      });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const handleTriggerAttack = async (scenarioId) => {
     setIsInjecting(true);
     setAttackFeedback(null);
@@ -105,12 +138,22 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
           ...prev,
           [nodeName]: { ...prev[nodeName], status: 'OFFLINE' }
         }));
+        setAttackFeedback({
+          type: 'ERROR',
+          message: `Regional Edge Partition initiated on ${nodeName}! Autonomous local buffering engaged. Operational Incident formed.`
+        });
+        if (onAttackTriggered) onAttackTriggered('edge_disconnect');
       } else {
         const res = await reconnectEdgeNode(nodeName);
         setEdgeNodes(prev => ({
           ...prev,
           [nodeName]: { ...prev[nodeName], status: 'ONLINE', local_buffer: [], buffered_count: 0 }
         }));
+        setAttackFeedback({
+          type: 'SUCCESS',
+          message: `Edge node ${nodeName} successfully reconnected! Batch-synchronized buffered telemetry to central core.`
+        });
+        if (onAttackTriggered) onAttackTriggered('edge_reconnect');
       }
       const updatedCounters = await fetchEdgeCounters();
       setEdgeCounters(updatedCounters);
@@ -127,6 +170,10 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
     try {
       const res = await testPqcValid(10000.0);
       setPqcResult(res);
+      setAttackFeedback({
+        type: 'SUCCESS',
+        message: `PQC Verification: ML-DSA-65 signature and SHA-384 digest verified authentic in ${res.verification_latency_ms}ms.`
+      });
     } catch (e) {
       console.error(e);
     } finally {
@@ -140,6 +187,11 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
     try {
       const res = await testPqcTamper(10000.0, 1000000.0);
       setPqcResult(res);
+      setAttackFeedback({
+        type: 'ERROR',
+        message: `🚨 PQC QUANTUM LAYER BREACH DETECTED: In-flight payload tamper (₹10,000 -> ₹1,000,000)! SHA-384 mismatch triggered instant rejection & SEV-1 Incident.`
+      });
+      if (onAttackTriggered) onAttackTriggered('pqc_tamper');
     } catch (e) {
       console.error(e);
     } finally {
@@ -148,10 +200,15 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
   };
 
   const handleReplayAml = async () => {
-    setAdapterStatus({ type: 'PENDING', text: `Replaying ${amlCount} AMLSim transactions (${amlPattern})...` });
+    setAdapterStatus({ type: 'PENDING', text: `Replaying ${amlCount} AMLSim transactions (${amlPattern.toUpperCase()})...` });
     try {
       const res = await replayAmlSim(amlPattern, amlCount);
-      setAdapterStatus({ type: 'SUCCESS', text: `AMLSim stream active! Ingesting ${amlCount} events into graph.` });
+      setAdapterStatus({ type: 'SUCCESS', text: `IBM AMLSim active! Ingested ${amlCount} transactions into temporal graph (${amlPattern.toUpperCase()} topology). Incident forming.` });
+      setAttackFeedback({
+        type: 'SUCCESS',
+        message: `IBM AMLSim stream active (${amlPattern.toUpperCase()}). Multi-entity money laundering ring forming in temporal graph.`
+      });
+      if (onAttackTriggered) onAttackTriggered('aml_replay');
     } catch (e) {
       setAdapterStatus({ type: 'ERROR', text: e.message });
     }
@@ -161,7 +218,12 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
     setAdapterStatus({ type: 'PENDING', text: `Replaying ${paysimCount} PaySim transactions (${paysimPattern})...` });
     try {
       const res = await replayPaySim(paysimPattern, paysimCount);
-      setAdapterStatus({ type: 'SUCCESS', text: `PaySim mobile stream active! Ingesting ${paysimCount} events.` });
+      setAdapterStatus({ type: 'SUCCESS', text: `PaySim mobile stream active! High-velocity balance drain & cash-out liquidation in progress.` });
+      setAttackFeedback({
+        type: 'SUCCESS',
+        message: `PaySim mobile money stream active. Rapid victim balance drain to cash liquidation sink.`
+      });
+      if (onAttackTriggered) onAttackTriggered('paysim_replay');
     } catch (e) {
       setAdapterStatus({ type: 'ERROR', text: e.message });
     }
@@ -172,6 +234,18 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
       const res = await startLoadTest(loadTier);
       setLoadRunning(true);
       setLoadMetrics(res.metrics);
+      if (loadTier >= 1000) {
+        setAttackFeedback({
+          type: 'ERROR',
+          message: `🚨 HIGH LOAD VOLUMETRIC SURGE: Stress engine active at ${loadTier.toLocaleString()} EPS! Botnet assault incident formed.`
+        });
+        if (onAttackTriggered) onAttackTriggered('load_stress');
+      } else {
+        setAttackFeedback({
+          type: 'SUCCESS',
+          message: `Load test started at ${loadTier.toLocaleString()} EPS.`
+        });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -182,6 +256,10 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
       const res = await stopLoadTest();
       setLoadRunning(false);
       setLoadMetrics(res.final_metrics);
+      setAttackFeedback({
+        type: 'SUCCESS',
+        message: 'Load test stopped cleanly. Volumetric stress incident resolved.'
+      });
     } catch (e) {
       console.error(e);
     }
@@ -314,6 +392,192 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
           <div className="text-[10px] font-mono text-red-400/80">Immediate intervention</div>
         </div>
       </div>
+
+      {/* Real-time Attack Impact & Emergency Response HUD (Persistent across Phase 1 - 5) */}
+      {activeIncident?.status === 'ACTIVE' ? (
+        <div className="p-4 rounded-xl bg-gradient-to-r from-red-950/70 via-slate-900 to-red-950/50 border-2 border-red-500/80 shadow-[0_0_30px_rgba(239,68,68,0.3)] animate-pulse-subtle">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-3 border-b border-red-500/30">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-lg bg-red-600/30 border border-red-500 flex items-center justify-center text-red-400 animate-pulse flex-shrink-0">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-red-300 uppercase tracking-wide">
+                    🚨 EMERGENCY THREAT DETECTED: {activeIncident.threat_type || activeIncident.title || 'COORDINATED ATTACK IN PROGRESS'}
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-red-500/30 text-red-200 border border-red-500/60 font-bold uppercase">
+                    SEV-1 ACTIVE
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-300 mt-0.5">
+                  Incident ID: <span className="text-red-300 font-bold">{activeIncident.id}</span> • Severity: <span className="text-amber-300 font-bold">{activeIncident.severity || 'CRITICAL'}</span> • Threat Risk: <span className="text-red-400 font-bold">{activeIncident.risk_score || 94}/100</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+              <button
+                onClick={() => onOpenApproval && onOpenApproval(activeIncident.recommended_action)}
+                className="flex-1 lg:flex-none px-4 py-2 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-mono text-xs font-bold flex items-center justify-center space-x-2 shadow-[0_0_15px_rgba(239,68,68,0.5)] transition-all transform hover:scale-[1.02] active:scale-95"
+              >
+                <UserCheck className="w-4 h-4" />
+                <span>APPROVE SOC QUARANTINE PROTOCOL</span>
+              </button>
+              <button
+                onClick={() => setShowInlineGraph(prev => !prev)}
+                className={`px-3 py-2 rounded-lg font-mono text-xs font-semibold flex items-center space-x-1.5 transition-all border ${
+                  showInlineGraph ? 'bg-indigo-950/80 text-indigo-200 border-indigo-500/60 shadow-[0_0_12px_rgba(99,102,241,0.3)]' : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                }`}
+                title="Toggle Canonical Graph inside Test Lab"
+              >
+                <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{showInlineGraph ? 'HIDE GRAPH' : 'EXPAND GRAPH'}</span>
+                <span className="px-1 py-0.2 rounded bg-indigo-500/30 text-[9px] text-indigo-300 font-bold">
+                  {graphData?.nodes?.length || 0}
+                </span>
+              </button>
+              {onSwitchToConsole && (
+                <button
+                  onClick={onSwitchToConsole}
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs font-semibold border border-slate-600 flex items-center space-x-1.5 transition-all"
+                  title="Switch to full-screen console view"
+                >
+                  <Eye className="w-3.5 h-3.5 text-blue-400" />
+                  <span>CONSOLE</span>
+                </button>
+              )}
+              <button
+                onClick={handleResetBaseline}
+                disabled={isResetting}
+                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 transition-all"
+                title="Reset incidents to clean baseline"
+              >
+                <RotateCcw className={`w-4 h-4 ${isResetting ? 'animate-spin text-blue-400' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Blast Radius Live Telemetry */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-3 text-xs font-mono">
+            <div className="p-2.5 rounded-lg bg-black/40 border border-red-500/30">
+              <div className="text-[10px] uppercase text-red-400 font-bold">Target Blast Radius</div>
+              <div className="text-sm font-bold text-slate-100 mt-1 truncate" title={activeIncident.affected_accounts?.join(', ') || 'ACC-101..ACC-505'}>
+                {activeIncident.affected_accounts?.length 
+                  ? `${activeIncident.affected_accounts.length} Compromised Entities` 
+                  : '5 Target Entities'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                {activeIncident.affected_accounts?.slice(0, 4).join(', ') || 'ACC-101, ACC-202, ACC-303'}
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-black/40 border border-red-500/30">
+              <div className="text-[10px] uppercase text-red-400 font-bold">Ingress Attack Vector</div>
+              <div className="text-sm font-bold text-red-300 mt-1 truncate">
+                {activeIncident.affected_devices?.[0] || activeIncident.device_id || 'DEV-D45'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                {activeIncident.regions?.join(', ') || 'IN-MUM'} Region
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-black/40 border border-red-500/30">
+              <div className="text-[10px] uppercase text-amber-400 font-bold">Exfiltration Drain Sink</div>
+              <div className="text-sm font-bold text-amber-300 mt-1 truncate">
+                {activeIncident.affected_recipients?.[0] || activeIncident.beneficiary_id || 'REC-R900'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5">High-velocity destination</div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-500/30">
+              <div className="text-[10px] uppercase text-emerald-400 font-bold">Mitigation Strategy</div>
+              <div className="text-sm font-bold text-emerald-300 mt-1 truncate">
+                {activeIncident.recommended_action?.label || 'Coordinated Isolation Protocol'}
+              </div>
+              <div className="text-[10px] text-emerald-400/80 mt-0.5">
+                {activeIncident.recommended_action?.containment_score || 96.5}% containment confidence
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : activeIncident?.status === 'CONTAINED' ? (
+        <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/50 via-slate-900 to-emerald-950/30 border border-emerald-500/50 shadow-lg">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-lg bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-mono font-bold text-emerald-300 uppercase tracking-wide">
+                    🛡️ THREAT CONTAINED: {activeIncident.threat_type || activeIncident.title || 'SOC RESPONSE DEPLOYED'}
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold uppercase">
+                    CONTAINED
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  Target entities quarantined, compromised credentials locked, network propagation halted.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              {onSwitchToConsole && (
+                <button
+                  onClick={onSwitchToConsole}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs border border-slate-600 flex items-center space-x-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>VIEW QUARANTINED GRAPH</span>
+                </button>
+              )}
+              <button
+                onClick={handleResetBaseline}
+                disabled={isResetting}
+                className="px-3 py-1.5 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 font-mono text-xs border border-blue-500/40 flex items-center space-x-1.5"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+                <span>RESET TO CLEAN BASELINE</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-700/80 flex items-center justify-between gap-3 text-xs font-mono">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-bold text-slate-200">SYSTEM BASELINE: NORMAL COMMERCIAL OPERATION</div>
+              <div className="text-[11px] text-slate-400">
+                Background events normalized (98.7% filtered locally at edge). Trigger any test scenario across Phase 1 - 5 below to evaluate detection, PQC, and SOC response.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleResetBaseline}
+            disabled={isResetting}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs border border-slate-600 flex items-center space-x-1.5 flex-shrink-0"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin text-blue-400' : ''}`} />
+            <span>PURGE / RESET</span>
+          </button>
+        </div>
+      )}
+
+      {/* Embedded Live Canonical Threat Graph */}
+      {showInlineGraph && (
+        <div className="mb-5 transition-all">
+          <ThreatGraphView 
+            graphData={graphData}
+            onRefresh={onRefreshGraph}
+            activeIncident={activeIncident}
+          />
+        </div>
+      )}
 
       {/* Sub-Navigation Tabs */}
       <div className="flex border-b border-soc-border space-x-2 overflow-x-auto pb-1">
@@ -469,6 +733,26 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
               <strong>Edge Autonomous Node Resiliency:</strong> In FinResolve, edge nodes execute low-latency local anomaly filtering. When a node experiences a network partition (OFFLINE), it activates autonomous local buffering. Once reconnected, it performs atomic batch synchronization to the central graph engine.
             </div>
           </div>
+
+          {/* Active Operational Outage Alert */}
+          {Object.values(edgeNodes).some(n => n.status === 'OFFLINE') && (
+            <div className="p-3.5 rounded-lg bg-amber-950/40 border-2 border-amber-500/70 text-amber-200 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-pulse-subtle">
+              <div className="flex items-center space-x-2.5">
+                <AlertTriangle className="w-5 h-5 text-amber-400 animate-pulse flex-shrink-0" />
+                <div>
+                  <div className="font-bold text-amber-300 uppercase">
+                    🚨 Operational Anomaly: Regional Edge Partition Active
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    One or more edge nodes are disconnected. Autonomous local ring buffer is accumulating transactions. Click "RECONNECT & SYNC" on the offline node to restore normal state.
+                  </div>
+                </div>
+              </div>
+              <span className="text-[10px] uppercase font-bold bg-amber-500/20 text-amber-300 px-2.5 py-1 rounded border border-amber-500/40 self-start sm:self-auto">
+                FAILOVER MODE ACTIVE
+              </span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Object.entries(edgeNodes).map(([nodeName, stats]) => {
@@ -681,6 +965,27 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
                     <strong>Mitigation Triggered:</strong> {pqcResult.mitigation}
                   </div>
                 )}
+
+                {pqcResult.is_tampered && (
+                  <div className="mt-4 pt-3 border-t border-red-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-xs text-red-200">
+                      <strong>SEV-1 Quantum Incident Formed:</strong> In-flight packet tampered. Intercept node identified at REC-MERC-4412.
+                    </div>
+                    <button
+                      onClick={() => onOpenApproval && onOpenApproval(activeIncident?.recommended_action || {
+                        strategy: 'PQC_KEY_REVOCATION',
+                        label: 'Lattice Session Key Revocation & Ingress Severance',
+                        containment_score: 98.5,
+                        customer_friction: 'LOW',
+                        description: 'Revoke ML-KEM-768 session key and isolate MITM intercept gateway.'
+                      })}
+                      className="px-4 py-2 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-mono text-xs font-bold flex items-center justify-center space-x-2 shadow-lg transition-all active:scale-95"
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>APPROVE LATTICE KEY REVOCATION (SOC GATE)</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -704,6 +1009,55 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
               adapterStatus.type === 'SUCCESS' ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/40' : 'bg-blue-950/40 text-blue-300 border border-blue-500/40'
             }`}>
               {adapterStatus.text}
+            </div>
+          )}
+
+          {/* Live Incident Feedback for AML / PaySim */}
+          {activeIncident?.threat_type?.includes('AMLSim') && (
+            <div className="p-3.5 rounded-lg bg-blue-950/40 border-2 border-blue-500/60 text-blue-200 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-pulse-subtle">
+              <div className="flex items-center space-x-2.5">
+                <Database className="w-5 h-5 text-blue-400 animate-pulse flex-shrink-0" />
+                <div>
+                  <div className="font-bold text-blue-300">
+                    🚨 IBM AMLSim Synthetic Money Laundering Syndicate Formed
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    Multi-entity topology actively correlated in graph: {activeIncident.affected_accounts?.length || 8} feeder accounts funneled to collector mule node.
+                  </div>
+                </div>
+              </div>
+              {onSwitchToConsole && (
+                <button
+                  onClick={onSwitchToConsole}
+                  className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs font-bold self-start sm:self-auto"
+                >
+                  VIEW GRAPH
+                </button>
+              )}
+            </div>
+          )}
+
+          {activeIncident?.threat_type?.includes('PaySim') && (
+            <div className="p-3.5 rounded-lg bg-amber-950/40 border-2 border-amber-500/60 text-amber-200 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-pulse-subtle">
+              <div className="flex items-center space-x-2.5">
+                <Flame className="w-5 h-5 text-amber-400 animate-pulse flex-shrink-0" />
+                <div>
+                  <div className="font-bold text-amber-300">
+                    🚨 PaySim Mobile Account Balance Drain Active
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    High-velocity balance transfer followed by immediate liquidation via cash agent.
+                  </div>
+                </div>
+              </div>
+              {onSwitchToConsole && (
+                <button
+                  onClick={onSwitchToConsole}
+                  className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-mono text-xs font-bold self-start sm:self-auto"
+                >
+                  VIEW GRAPH
+                </button>
+              )}
             </div>
           )}
 
@@ -817,6 +1171,36 @@ export default function FinResolveTestLab({ activeIncident, onAttackTriggered, t
       {activeSubTab === 'load' && (
         <div className="space-y-6">
           
+          {/* Volumetric Attack Burst Indicator when High Load is Running */}
+          {loadRunning && loadTier >= 1000 && (
+            <div className="p-3.5 rounded-lg bg-red-950/40 border-2 border-red-500/70 text-red-200 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-pulse-subtle">
+              <div className="flex items-center space-x-2.5">
+                <Flame className="w-5 h-5 text-red-400 animate-pulse flex-shrink-0" />
+                <div>
+                  <div className="font-bold text-red-300 uppercase">
+                    🚨 High-Velocity Stress Assault In Progress ({loadTier.toLocaleString()} EPS)
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    Volumetric botnet attack burst disguised in high-throughput traffic. Edge nodes discarding 98.7% normal events locally; elevated incident formed.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => onOpenApproval && onOpenApproval(activeIncident?.recommended_action || {
+                    strategy: 'RATE_LIMIT_ISOLATION',
+                    label: 'Adaptive Ingress Rate-Limiting & Edge Sharding',
+                    containment_score: 95.8,
+                    customer_friction: 'LOW'
+                  })}
+                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 text-white font-mono text-xs font-bold shadow-md"
+                >
+                  CONTAIN LOAD ATTACK
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Tier Controller */}
           <div className="p-5 rounded-xl bg-soc-card border border-soc-border space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

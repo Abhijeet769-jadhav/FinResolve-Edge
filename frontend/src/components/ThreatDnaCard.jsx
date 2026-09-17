@@ -76,38 +76,36 @@ export default function ThreatDnaCard({ dna, incident }) {
         </div>
       </div>
 
-      {/* DNA Dimension Tags */}
-      <div className="grid grid-cols-2 gap-2 mb-3 font-mono text-[11px]">
-        <div className="bg-soc-bg p-2 rounded border border-soc-border/60 flex items-center justify-between">
-          <span className="text-slate-400">Velocity:</span>
-          <span className={`px-1.5 py-0.2 rounded text-[10px] border font-bold ${getLevelBadge(effectiveDna.velocity)}`}>
-            {effectiveDna.velocity}
-          </span>
-        </div>
-        <div className="bg-soc-bg p-2 rounded border border-soc-border/60 flex items-center justify-between">
-          <span className="text-slate-400">Coordination:</span>
-          <span className={`px-1.5 py-0.2 rounded text-[10px] border font-bold ${getLevelBadge(effectiveDna.coordination)}`}>
-            {effectiveDna.coordination}
-          </span>
-        </div>
-        <div className="bg-soc-bg p-2 rounded border border-soc-border/60 flex items-center justify-between">
-          <span className="text-slate-400">Geo Spread:</span>
-          <span className={`px-1.5 py-0.2 rounded text-[10px] border font-bold ${getLevelBadge(effectiveDna.geographic_spread)}`}>
-            {effectiveDna.geographic_spread}
-          </span>
-        </div>
-        <div className="bg-soc-bg p-2 rounded border border-soc-border/60 flex items-center justify-between">
-          <span className="text-slate-400">Mule Concentration:</span>
-          <span className={`px-1.5 py-0.2 rounded text-[10px] border font-bold ${getLevelBadge(effectiveDna.recipient_concentration)}`}>
-            {effectiveDna.recipient_concentration}
-          </span>
-        </div>
+      {/* DNA Dimension Tags with Mini Meters */}
+      <div className="grid grid-cols-2 gap-2.5 mb-3 font-mono text-[11px]">
+        {[
+          { label: 'Velocity', val: effectiveDna.velocity, color: 'from-orange-500 to-red-500', pct: effectiveDna.velocity === 'CRITICAL' ? 100 : effectiveDna.velocity === 'HIGH' ? 80 : effectiveDna.velocity === 'MEDIUM' ? 50 : 25 },
+          { label: 'Coordination', val: effectiveDna.coordination, color: 'from-purple-500 to-indigo-500', pct: effectiveDna.coordination === 'CRITICAL' ? 100 : effectiveDna.coordination === 'HIGH' ? 85 : effectiveDna.coordination === 'MEDIUM' ? 50 : 25 },
+          { label: 'Geo Spread', val: effectiveDna.geographic_spread, color: 'from-amber-500 to-orange-500', pct: effectiveDna.geographic_spread === 'CRITICAL' ? 100 : effectiveDna.geographic_spread === 'HIGH' ? 75 : effectiveDna.geographic_spread === 'MEDIUM' ? 50 : 25 },
+          { label: 'Mule Conc.', val: effectiveDna.recipient_concentration, color: 'from-rose-500 to-pink-500', pct: effectiveDna.recipient_concentration === 'CRITICAL' ? 100 : effectiveDna.recipient_concentration === 'HIGH' ? 90 : effectiveDna.recipient_concentration === 'MEDIUM' ? 50 : 25 },
+        ].map((dim) => (
+          <div key={dim.label} className="bg-soc-bg/90 p-2 rounded-lg border border-soc-border/70 flex flex-col justify-between space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 text-[10px]">{dim.label}:</span>
+              <span className={`px-1.5 py-0.2 rounded text-[10px] border font-bold ${getLevelBadge(dim.val)}`}>
+                {dim.val}
+              </span>
+            </div>
+            <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+              <div 
+                className={`h-full bg-gradient-to-r ${dim.color} rounded-full`}
+                style={{ width: `${dim.pct}%` }}
+              />
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Characteristics List */}
       <div className="space-y-1 text-[11px] font-mono text-slate-300 bg-soc-bg/80 p-2.5 rounded-lg border border-soc-border/60">
-        <div className="text-[10px] font-semibold text-slate-400 uppercase mb-1">
-          Observed Structural Markers:
+        <div className="text-[10px] font-semibold text-slate-400 uppercase mb-1 flex items-center justify-between">
+          <span>Observed Structural Markers:</span>
+          <span className="text-purple-400 text-[9px]">{effectiveDna.characteristics?.length || 0} Patterns</span>
         </div>
         {effectiveDna.characteristics?.map((char, idx) => (
           <div key={idx} className="flex items-start space-x-1.5">

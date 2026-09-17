@@ -46,6 +46,22 @@ async def telemetry_ticker_loop():
         except Exception as e:
             logger.debug(f"Telemetry tick error: {e}")
 
+AUTO_SCENARIOS = [
+    "mule_network",
+    "weak_signals",
+    "coordinated_fraud",
+    "recipient_attack",
+    "credential_stuffing",
+    "account_takeover"
+]
+_auto_scenario_idx = 0
+
+def get_next_auto_scenario() -> str:
+    global _auto_scenario_idx
+    scenario = AUTO_SCENARIOS[_auto_scenario_idx % len(AUTO_SCENARIOS)]
+    _auto_scenario_idx += 1
+    return scenario
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: start synthetic event generator background task
@@ -92,6 +108,41 @@ async def get_events(limit: int = 50):
     events = event_generator.recent_events[:limit]
     return [e.model_dump() for e in events]
 
+@app.get("/api/stream/status")
+async def get_stream_status():
+    """Returns continuous background event injection stream status."""
+    return {
+        "is_running": event_generator.is_running,
+        "is_paused": getattr(event_generator, 'is_paused', False),
+        "attack_in_progress": event_generator.attack_in_progress,
+        "total_events": event_generator.event_counter - 10000,
+        "target_eps": 12.5
+    }
+
+@app.post("/api/stream/resume")
+async def resume_stream():
+    """Resumes continuous background event generation."""
+    event_generator.resume()
+    if not event_generator.is_running:
+        asyncio.create_task(event_generator.start())
+    return {"status": "STREAM_RESUMED", "is_running": True, "is_paused": False}
+
+@app.post("/api/stream/pause")
+async def pause_stream():
+    """Pauses continuous background event generation."""
+    event_generator.pause()
+    return {"status": "STREAM_PAUSED", "is_running": True, "is_paused": True}
+
+@app.post("/api/stream/inject-batch")
+async def inject_batch(count: int = Query(15, ge=1, le=100)):
+    """Injects a batch of continuous benign financial events immediately."""
+    events = []
+    for _ in range(count):
+        evt = event_generator.generate_benign_event()
+        await event_generator.process_and_broadcast_event(evt, broadcast_graph=False)
+        events.append(evt.model_dump())
+    return {"status": "BATCH_INJECTED", "count": len(events)}
+
 @app.get("/api/incidents")
 async def get_incidents():
     """Returns all incidents sorted by recency."""
@@ -106,6 +157,22 @@ async def get_incident(incident_id: str):
         raise HTTPException(status_code=404, detail="Incident not found")
     return inc.model_dump()
 
+@app.post("/api/incidents/reset")
+async def reset_incidents():
+    """Resets all incidents, correlation structures, and graph state to clean baseline."""
+    anomaly_engine.reset_incidents()
+    graph_engine.clear()
+    event_generator.resume()
+    await ws_manager.broadcast("incidents_reset", {"message": "All incidents and graph states reset"})
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 1,
+        "code": "BASELINE",
+        "title": "Baseline Financial Flow",
+        "subtitle": "System baseline restored. Zero active threats.",
+        "status": "NORMAL"
+    })
+    return {"status": "SUCCESS", "message": "Incidents and graph reset to clean baseline"}
+
 @app.get("/api/graph")
 async def get_graph(incident_id: Optional[str] = None):
     """Returns graph representation formatted for React Flow."""
@@ -114,6 +181,12 @@ async def get_graph(incident_id: Optional[str] = None):
         inc = anomaly_engine.get_incident(incident_id)
         if inc:
             focus_nodes = inc.affected_accounts + inc.affected_devices + inc.affected_recipients
+    else:
+        # Default to latest active or contained incident so topology always has prime focus
+        all_inc = anomaly_engine.get_all_incidents()
+        if all_inc:
+            latest = all_inc[0]
+            focus_nodes = latest.affected_accounts + latest.affected_devices + latest.affected_recipients
 
     return graph_engine.to_react_flow(focus_nodes=focus_nodes)
 
@@ -157,6 +230,11 @@ async def approve_response(req: ResponseActionRequest):
         raise HTTPException(status_code=404, detail="Incident not found")
 
     result = response_engine.execute_approval(inc, req)
+    logger.info(f"approve_response: incident_id={req.incident_id}, strategy={req.strategy}, source={req.source}, auto_spawn_next={getattr(req, 'auto_spawn_next', True)}")
+
+    # If PQC key revocation, update quantum tamper entity in canonical graph
+    if "PQC" in req.strategy or "LATTICE" in req.strategy or "KEY_REVOCATION" in req.strategy:
+        graph_engine.update_pqc_tamper(10000.0, 1000000.0, is_contained=True)
 
     # Broadcast updates across WebSockets
     await ws_manager.broadcast("response_approved", result)
@@ -189,11 +267,31 @@ async def approve_response(req: ResponseActionRequest):
         "status": "CONTAINED"
     })
 
-    # Broadcast updated graph
-    rf_graph = graph_engine.to_react_flow(focus_nodes=inc.affected_accounts + inc.affected_devices)
+    # Broadcast updated canonical graph with contained states
+    focus_nodes = inc.affected_accounts + inc.affected_devices + inc.affected_recipients + ["ADV-QUANTUM-MITM"]
+    rf_graph = graph_engine.to_react_flow(focus_nodes=focus_nodes)
     await ws_manager.broadcast("graph_updated", rf_graph)
 
-    return {"status": "SUCCESS", "action": result, "incident": inc.model_dump()}
+    # Record snapshot for Replay Attack feature
+    graph_engine.record_attack_snapshot(inc.id, f"SOC Analyst Approved {req.strategy} -> THREAT CONTAINED", {"action": result})
+
+    # Auto-spawn next incident if not from test lab or manual attack trigger
+    should_spawn = getattr(req, "auto_spawn_next", True) and req.source not in ["testlab", "attack_trigger"]
+    if should_spawn:
+        async def schedule_next_incident_arrival():
+            try:
+                # Wait 9.0 seconds for containment stabilization before new threat arrives
+                # Allows analyst to clearly observe green/yellow/red containment posture and connected edges
+                await asyncio.sleep(9.0)
+                next_scenario = get_next_auto_scenario()
+                logger.info(f"Auto-arrival: Spawning next incoming threat scenario '{next_scenario}' post-approval")
+                await event_generator.inject_attack_scenario(next_scenario)
+            except Exception as ex:
+                logger.error(f"Failed to auto-spawn next incident: {ex}")
+
+        asyncio.create_task(schedule_next_incident_arrival())
+
+    return {"status": "SUCCESS", "action": result, "incident": inc.model_dump(), "auto_spawn": should_spawn}
 
 @app.post("/api/response/reject")
 async def reject_response(req: ResponseActionRequest):
@@ -254,16 +352,80 @@ async def get_edge_counters():
 
 @app.post("/api/edge/{node_name}/disconnect")
 async def disconnect_edge_node(node_name: str):
-    """Simulates edge node disconnection, buffering events locally."""
+    """Simulates edge node disconnection, buffering events locally, and forms an Operational Incident."""
     res = anomaly_engine.disconnect_edge_node(node_name)
+    inc = anomaly_engine.create_edge_partition_incident(node_name)
+
+    # Mutate canonical graph state
+    graph_engine.update_edge_resiliency(node_name, is_disconnected=True, stats=res)
+    rf_graph = graph_engine.to_react_flow(focus_nodes=[f"EDGE-{node_name.upper()}", f"GATEWAY-{node_name.upper()}", "GATEWAY-PUNE"])
+    await ws_manager.broadcast("graph_updated", rf_graph)
+    graph_engine.record_attack_snapshot(inc.id, f"Regional Edge Partition: {node_name} Outage", {"status": "PARTITIONED"})
+
     await ws_manager.broadcast("edge_node_updated", res)
-    return res
+    await ws_manager.broadcast("incident_created", {"incident": inc.model_dump()})
+    await ws_manager.broadcast("emergency_alert", {
+        "incident_id": inc.id,
+        "threat_type": inc.threat_type,
+        "severity": inc.severity,
+        "risk_score": inc.risk_score,
+        "affected_accounts": inc.affected_accounts,
+        "affected_devices": inc.affected_devices,
+        "affected_recipients": inc.affected_recipients,
+        "scenario": f"Edge Node Partition ({node_name})",
+        "recommended_action": inc.recommended_action
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 2,
+        "code": "EDGE_ANOMALY",
+        "title": "Edge Autonomous Anomaly",
+        "subtitle": f"{node_name} Node Link Partitioned - Local buffer active",
+        "status": "COMPLETED"
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 3,
+        "code": "INCIDENT_FORMATION",
+        "title": "Incident Formation",
+        "subtitle": f"{inc.id}: Operational Outage on {node_name}",
+        "status": "COMPLETED"
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 10,
+        "code": "RECOMMENDED_ACTION",
+        "title": "Recommended Action",
+        "subtitle": f"Autonomous Edge Failover & Regional Secondary Routing ({node_name})",
+        "status": "COMPLETED"
+    })
+    return {**res, "incident": inc.model_dump()}
 
 @app.post("/api/edge/{node_name}/reconnect")
 async def reconnect_edge_node(node_name: str):
-    """Simulates edge node reconnection, flushing buffered events to central."""
+    """Simulates edge node reconnection, flushing buffered events to central, and resolving incident."""
     res = anomaly_engine.reconnect_and_sync_edge_node(node_name)
+
+    # Mutate canonical graph state
+    graph_engine.update_edge_resiliency(node_name, is_disconnected=False, stats=res)
+    rf_graph = graph_engine.to_react_flow(focus_nodes=[f"EDGE-{node_name.upper()}", f"GATEWAY-{node_name.upper()}", "GATEWAY-PUNE"])
+    await ws_manager.broadcast("graph_updated", rf_graph)
+
+    # Find active edge partition incident for this node and contain it
+    for inc in anomaly_engine.get_all_incidents():
+        if inc.status == "ACTIVE" and ("Edge" in inc.threat_type or node_name in str(inc.affected_devices)):
+            inc.status = "CONTAINED"
+            await ws_manager.broadcast("incident_contained", {
+                "incident_id": inc.id,
+                "status": "CONTAINED",
+                "action": {"strategy": "FAILOVER_REROUTE", "status": "SYNCED_AND_RESOLVED"}
+            })
+
     await ws_manager.broadcast("edge_node_updated", res)
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 13,
+        "code": "INCIDENT_RESOLUTION",
+        "title": "Incident Resolution",
+        "subtitle": f"{node_name} reconnected & {res.get('synced_events', 0)} buffered events synchronized",
+        "status": "COMPLETED"
+    })
     return res
 
 # ==========================================
@@ -282,23 +444,148 @@ async def test_pqc_valid(amount: float = Query(10000.0)):
 
 @app.post("/api/pqc/test-tamper")
 async def test_pqc_tamper(original_amount: float = Query(10000.0), tampered_amount: float = Query(1000000.0)):
-    """Runs PQC tamper test where amount is altered in-flight (₹10,000 -> ₹1,000,000)."""
+    """Runs PQC tamper test (₹10K -> ₹10L), creates SEV-1 incident, and broadcasts emergency alert."""
     res = pqc_lab.run_tamper_test(original_amount=original_amount, tampered_amount=tampered_amount)
-    return res
+
+    # Create SEV-1 Cryptographic Integrity Incident in anomaly engine
+    inc = anomaly_engine.create_pqc_tamper_incident(original_amount, tampered_amount)
+
+    # Mutate canonical graph state: A101 -> D45 -> ADV-QUANTUM-MITM -> TXN-PQC-TAMPER -> R900
+    graph_engine.update_pqc_tamper(original_amount, tampered_amount, is_contained=False)
+    rf_graph = graph_engine.to_react_flow(focus_nodes=["ACC-A101", "DEV-D45", "ADV-QUANTUM-MITM", "TXN-PQC-TAMPER", "REC-R900"])
+    await ws_manager.broadcast("graph_updated", rf_graph)
+    graph_engine.record_attack_snapshot(inc.id, "Simulated Adversarial Payload Tampering (ML-DSA-65 Failure)", {
+        "original_amount": original_amount,
+        "tampered_amount": tampered_amount
+    })
+
+    await ws_manager.broadcast("incident_created", {"incident": inc.model_dump()})
+    await ws_manager.broadcast("emergency_alert", {
+        "incident_id": inc.id,
+        "threat_type": inc.threat_type,
+        "severity": inc.severity,
+        "risk_score": inc.risk_score,
+        "affected_accounts": inc.affected_accounts,
+        "affected_devices": inc.affected_devices,
+        "affected_recipients": inc.affected_recipients,
+        "scenario": "Simulated Adversarial Payload Tampering",
+        "recommended_action": inc.recommended_action
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 2,
+        "code": "EDGE_ANOMALY",
+        "title": "Edge Anomaly Detection",
+        "subtitle": "SHA-384 Digest Mismatch & ML-DSA-65 Signature Failure",
+        "status": "COMPLETED"
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 3,
+        "code": "INCIDENT_FORMATION",
+        "title": "Incident Formation",
+        "subtitle": f"{inc.id}: Quantum Layer Payload Tamper (₹{original_amount:,.0f} -> ₹{tampered_amount:,.0f})",
+        "status": "COMPLETED"
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 5,
+        "code": "THREAT_DNA",
+        "title": "Threat DNA Extraction",
+        "subtitle": "Simulated Adversarial Payload Tampering Profile",
+        "status": "COMPLETED"
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 10,
+        "code": "RECOMMENDED_ACTION",
+        "title": "Recommended Action",
+        "subtitle": "Lattice Session Key Revocation & Ingress Severance",
+        "status": "COMPLETED"
+    })
+
+    return {**res, "incident": inc.model_dump()}
 
 # ==========================================
 # PHASE 4: DATASET ADAPTERS (AMLSim & PaySim)
 # ==========================================
-async def _replay_adapter_stream(events: List[Any], delay_sec: float = 0.08):
-    for evt in events:
-        await event_generator.process_and_broadcast_event(evt, is_attack=False, broadcast_graph=True)
+async def _replay_adapter_stream(events: List[Any], dataset_name: str, pattern: str, delay_sec: float = 0.08):
+    await ws_manager.broadcast("attack_started", {
+        "scenario_id": f"{dataset_name.lower()}_{pattern}",
+        "scenario_name": f"{dataset_name} Stream Replay ({pattern.upper()})",
+        "severity": "CRITICAL" if pattern != "normal" else "LOW",
+        "message": f"Replaying {len(events)} synthetic transactions from {dataset_name} ({pattern.upper()})."
+    })
+    await ws_manager.broadcast("workflow_stage_update", {
+        "stage_id": 1,
+        "code": "EVENT_INGESTION",
+        "title": "Real-Time Event Ingestion",
+        "subtitle": f"Ingesting {len(events)} events from {dataset_name}",
+        "status": "COMPLETED"
+    })
+
+    created_incident = None
+    stream_entities = set()
+    for idx, evt in enumerate(events):
+        rep, sig, inc = anomaly_engine.evaluate_event(evt)
+        graph_engine.add_event(evt, risk_level=rep.classification, anomaly_reasons=rep.reasons)
+        stream_entities.add(evt.account_id)
+        if evt.recipient_id:
+            stream_entities.add(evt.recipient_id)
+        if inc and not created_incident:
+            created_incident = inc
+
+        await ws_manager.broadcast("new_event", {
+            "event": evt.model_dump(),
+            "anomaly": rep.model_dump(),
+            "signal": sig.model_dump() if sig else None
+        })
+
+        # Periodic real-time graph update during stream replay (every 3 events or last event)
+        if idx % 3 == 0 or idx == len(events) - 1:
+            rf_graph = graph_engine.to_react_flow(focus_nodes=list(stream_entities))
+            await ws_manager.broadcast("graph_updated", rf_graph)
+
         await asyncio.sleep(delay_sec)
+
+    # Final cohesive graph update
+    rf_graph = graph_engine.to_react_flow(focus_nodes=list(stream_entities))
+    await ws_manager.broadcast("graph_updated", rf_graph)
+
+    if created_incident:
+        graph_engine.record_attack_snapshot(
+            created_incident.id, 
+            f"{dataset_name} Stream Replay ({pattern.upper()})",
+            {"events_count": len(events), "entities": len(stream_entities)}
+        )
+        await ws_manager.broadcast("incident_created", {"incident": created_incident.model_dump()})
+        await ws_manager.broadcast("emergency_alert", {
+            "incident_id": created_incident.id,
+            "threat_type": created_incident.threat_type,
+            "severity": created_incident.severity,
+            "risk_score": created_incident.risk_score,
+            "affected_accounts": created_incident.affected_accounts,
+            "affected_devices": created_incident.affected_devices,
+            "affected_recipients": created_incident.affected_recipients,
+            "scenario": f"{dataset_name} ({pattern.upper()})",
+            "recommended_action": created_incident.recommended_action
+        })
+        for st, title, sub in [
+            (3, "Incident Formation", f"{created_incident.id}: {created_incident.threat_type}"),
+            (4, "Temporal Graph", f"Graph enriched with {len(created_incident.affected_accounts)} accounts"),
+            (5, "Threat DNA", "Multi-Entity Coordinated Topology Extracted"),
+            (10, "Recommended Action", created_incident.recommended_action.get("label", "Coordinated Response") if created_incident.recommended_action else "Coordinated Isolation")
+        ]:
+            await asyncio.sleep(0.08)
+            await ws_manager.broadcast("workflow_stage_update", {
+                "stage_id": st,
+                "code": f"STAGE_{st}",
+                "title": title,
+                "subtitle": sub,
+                "status": "COMPLETED"
+            })
 
 @app.post("/api/adapters/amlsim/replay")
 async def replay_amlsim(pattern: str = Query("fan_in"), count: int = Query(20)):
     """Replays synthetic IBM AMLSim topology (fan_in, cycle, scatter_gather, normal)."""
     events = amlsim_adapter.generate_synthetic_stream(pattern=pattern, count=count)
-    asyncio.create_task(_replay_adapter_stream(events))
+    asyncio.create_task(_replay_adapter_stream(events, "IBM_AMLSim", pattern))
     return {
         "status": "REPLAY_STARTED",
         "dataset": "IBM_AMLSim",
@@ -311,7 +598,7 @@ async def replay_amlsim(pattern: str = Query("fan_in"), count: int = Query(20)):
 async def replay_paysim(pattern: str = Query("transfer_cashout_drain"), count: int = Query(20)):
     """Replays synthetic PaySim mobile money fraud or payment burst."""
     events = paysim_adapter.generate_synthetic_stream(pattern=pattern, count=count)
-    asyncio.create_task(_replay_adapter_stream(events))
+    asyncio.create_task(_replay_adapter_stream(events, "PaySim_MobileMoney", pattern))
     return {
         "status": "REPLAY_STARTED",
         "dataset": "PaySim_MobileMoney",
@@ -327,20 +614,101 @@ async def replay_paysim(pattern: str = Query("transfer_cashout_drain"), count: i
 async def start_load_test(tier: int = Query(100)):
     """Starts high-throughput load test at tier (10, 100, 1000, 5000, 10000 evts/s)."""
     load_test_engine.start(tier_eps=tier)
+
+    inc_data = None
+    if tier >= 1000:
+        inc = anomaly_engine.create_load_stress_incident(tier)
+        inc_data = inc.model_dump()
+
+        # Mutate canonical graph state: BOTNET -> EDGE-INGRESS (98.7% dropped) -> CORE-LEDGER
+        graph_engine.update_load_stress(tier, is_stopped=False)
+        rf_graph = graph_engine.to_react_flow(focus_nodes=["BOTNET-SYNDICATE-ALPHA", "BOTNET-SYNDICATE-BETA", "EDGE-INGRESS-FILTER", "CORE-LEDGER-PIPELINE"])
+        await ws_manager.broadcast("graph_updated", rf_graph)
+        graph_engine.record_attack_snapshot(inc.id, f"Volumetric Botnet Assault ({tier:,} EPS)", {"filtered_rate": "98.7%"})
+
+        await ws_manager.broadcast("incident_created", {"incident": inc_data})
+        await ws_manager.broadcast("emergency_alert", {
+            "incident_id": inc.id,
+            "threat_type": inc.threat_type,
+            "severity": inc.severity,
+            "risk_score": inc.risk_score,
+            "affected_accounts": inc.affected_accounts,
+            "affected_devices": inc.affected_devices,
+            "affected_recipients": inc.affected_recipients,
+            "scenario": f"High Velocity Load Stress ({tier:,} EPS)",
+            "recommended_action": inc.recommended_action
+        })
+        await ws_manager.broadcast("workflow_stage_update", {
+            "stage_id": 2,
+            "code": "EDGE_ANOMALY",
+            "title": "Edge Volumetric Anomaly",
+            "subtitle": f"Stress spike: {tier:,} EPS. Filtering 98.7% locally at edge.",
+            "status": "COMPLETED"
+        })
+        await ws_manager.broadcast("workflow_stage_update", {
+            "stage_id": 3,
+            "code": "INCIDENT_FORMATION",
+            "title": "Incident Formation",
+            "subtitle": f"{inc.id}: Volumetric Botnet Assault Detected",
+            "status": "COMPLETED"
+        })
+        await ws_manager.broadcast("workflow_stage_update", {
+            "stage_id": 10,
+            "code": "RECOMMENDED_ACTION",
+            "title": "Recommended Action",
+            "subtitle": "Adaptive Ingress Rate-Limiting & Edge Sharding",
+            "status": "COMPLETED"
+        })
+
     return {
         "status": "LOAD_TEST_STARTED",
         "tier_eps": tier,
-        "metrics": load_test_engine.get_status()
+        "metrics": load_test_engine.get_status(),
+        "incident": inc_data
     }
 
 @app.post("/api/load-test/stop")
 async def stop_load_test():
-    """Stops the active load test."""
+    """Stops the active load test and resolves load stress incidents."""
     load_test_engine.stop()
+
+    # Mutate canonical graph to contained
+    graph_engine.update_load_stress(0, is_stopped=True)
+    rf_graph = graph_engine.to_react_flow(focus_nodes=["BOTNET-SYNDICATE-ALPHA", "BOTNET-SYNDICATE-BETA", "EDGE-INGRESS-FILTER", "CORE-LEDGER-PIPELINE"])
+    await ws_manager.broadcast("graph_updated", rf_graph)
+
+    for inc in anomaly_engine.get_all_incidents():
+        if inc.status == "ACTIVE" and "Volumetric" in inc.threat_type:
+            inc.status = "CONTAINED"
+            await ws_manager.broadcast("incident_contained", {
+                "incident_id": inc.id,
+                "status": "CONTAINED",
+                "action": {"strategy": "RATE_LIMIT_ISOLATION", "status": "LOAD_CONTAINED"}
+            })
+    return {"status": "LOAD_TEST_STOPPED"}
+
+# ==========================================
+# PHASE 10: REPLAY ATTACK FEATURE
+# ==========================================
+@app.get("/api/incidents/{incident_id}/replay-steps")
+async def get_incident_replay_steps(incident_id: str):
+    """Returns recorded progression timeline snapshots for Replay Attack feature."""
+    steps = graph_engine.get_attack_snapshots(incident_id)
     return {
-        "status": "LOAD_TEST_STOPPED",
-        "final_metrics": load_test_engine.get_status()
+        "incident_id": incident_id,
+        "total_steps": len(steps),
+        "steps": steps
     }
+
+@app.post("/api/incidents/{incident_id}/replay-step/{step_index}")
+async def replay_single_step(incident_id: str, step_index: int):
+    """Broadcasts a specific replay step across WebSocket for synchronized client playback."""
+    steps = graph_engine.get_attack_snapshots(incident_id)
+    if 0 <= step_index < len(steps):
+        target_step = steps[step_index]
+        await ws_manager.broadcast("graph_updated", target_step["graph"])
+        return {"status": "STEP_BROADCAST", "step": target_step}
+    raise HTTPException(status_code=404, detail="Step index out of range")
 
 @app.get("/api/load-test/metrics")
 async def get_load_test_metrics():

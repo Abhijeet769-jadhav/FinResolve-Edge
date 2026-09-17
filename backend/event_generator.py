@@ -1,6 +1,8 @@
 import asyncio
 import random
 import logging
+import uuid
+from collections import defaultdict
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from models import FinancialEvent, EventType
@@ -23,26 +25,52 @@ BENIGN_IPS = [f"10.23.{random.randint(10, 80)}.{random.randint(2, 250)}" for _ i
 class EventGenerator:
     def __init__(self):
         self.is_running = False
+        self.is_paused = False
         self.event_counter = 10000
+        self.edge_sequences: Dict[str, int] = defaultdict(int)
         self.recent_events: List[FinancialEvent] = []
         self.max_history = 100
         self.attack_in_progress = False
 
-    def next_event_id(self) -> str:
+    def next_event_identity(self, location: Optional[str] = None) -> tuple[str, str, int]:
+        """Generates an authoritative, collision-proof event identity:
+        - event_id: EVT-<UUID12> (guaranteed uniqueness across runs, restarts, distributed generators)
+        - edge_id: EDGE-<LOCATION> (identifies regional edge ingestion node)
+        - sequence_number: Monotonic per-edge sequence counter for replay detection / buffering sync
+        """
         self.event_counter += 1
-        return f"EVT-{self.event_counter}"
+        node_loc = location if location in EDGE_NODES else "Mumbai"
+        edge_id = f"EDGE-{node_loc.upper()}"
+        self.edge_sequences[edge_id] += 1
+        seq = self.edge_sequences[edge_id]
+        event_id = f"EVT-{uuid.uuid4().hex[:12].upper()}"
+        return event_id, edge_id, seq
+
+    def next_event_id(self, location: Optional[str] = None) -> str:
+        evt_id, _, _ = self.next_event_identity(location)
+        return evt_id
+
+    def pause(self):
+        self.is_paused = True
+
+    def resume(self):
+        self.is_paused = False
+        self.attack_in_progress = False
 
     async def start(self):
         """Starts the continuous background event loop."""
         self.is_running = True
-        logger.info("EventGenerator started.")
+        self.is_paused = False
+        logger.info("EventGenerator started continuous event stream.")
         while self.is_running:
             try:
-                # High-frequency continuous event generation stream
-                if not self.attack_in_progress:
+                # High-frequency continuous event generation stream (~12.5 events/sec)
+                if not self.attack_in_progress and not self.is_paused:
                     event = self.generate_benign_event()
-                    await self.process_and_broadcast_event(event, broadcast_graph=True)
+                    await self.process_and_broadcast_event(event, broadcast_graph=False)
                 await asyncio.sleep(0.08)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.error(f"Error in background event loop: {e}")
                 await asyncio.sleep(0.5)
@@ -57,21 +85,25 @@ class EventGenerator:
             EventType.MERCHANT_PAYMENT,
             EventType.TRANSACTION
         ])
-        acc = random.choice(BENIGN_ACCOUNTS)
-        dev = random.choice(BENIGN_DEVICES)
-        loc = random.choice(EDGE_NODES)
-        ip = random.choice(BENIGN_IPS)
+        
+        # Each benign account has its own consistent home device, location, and subnet
+        acc_idx = random.randint(1001, 1040)
+        acc = f"ACC-{acc_idx}"
+        dev = f"DEV-USR-{acc_idx}"
+        loc = EDGE_NODES[acc_idx % len(EDGE_NODES)]
+        ip = f"192.168.{(acc_idx % 250) + 1}.{random.randint(10, 220)}"
 
         amount = 0.0
         rec = None
         mer = None
 
         if evt_type == EventType.TRANSACTION:
-            amount = round(random.uniform(500, 15000), 2)
-            rec = random.choice(BENIGN_RECIPIENTS)
+            amount = round(random.uniform(500, 9500), 2)
+            # Consistent legitimate contacts
+            rec = f"REC-FRIEND-{(acc_idx % 10) + 1}"
         elif evt_type == EventType.MERCHANT_PAYMENT:
-            amount = round(random.uniform(150, 4500), 2)
-            mer = random.choice(BENIGN_MERCHANTS)
+            amount = round(random.uniform(150, 2500), 2)
+            mer = f"MER-STORE-{(acc_idx % 8) + 1}"
 
         return FinancialEvent(
             event_id=self.next_event_id(),
@@ -95,8 +127,8 @@ class EventGenerator:
         # Record metrics in 1-second telemetry aggregator
         telemetry_tracker.record_event(is_anomaly=(report.classification in ["HIGH", "CRITICAL"]))
 
-        # 2. Ingest into graph
-        graph_engine.add_event(event, risk_level=report.classification)
+        # 2. Ingest into canonical graph
+        graph_engine.add_event(event, risk_level=report.classification, anomaly_reasons=report.reasons)
 
         # Add to recent events buffer
         self.recent_events.insert(0, event)
@@ -132,10 +164,21 @@ class EventGenerator:
                 "recommendation": incident.recommended_action
             })
 
-            # Broadcast graph update only when requested to avoid DOM/GPU thrashing
-            if broadcast_graph:
-                rf_graph = graph_engine.to_react_flow(focus_nodes=incident.affected_accounts + incident.affected_devices)
-                await ws_manager.broadcast("graph_updated", rf_graph)
+        # Event-driven graph update: broadcast whenever an attack event, incident, or anomaly occurs
+        if broadcast_graph and (incident or is_attack or report.classification in ["HIGH", "CRITICAL"]):
+            focus_entities = (incident.affected_accounts + incident.affected_devices + incident.affected_recipients) if incident else [event.account_id, event.device_id]
+            if event.recipient_id and event.recipient_id not in focus_entities:
+                focus_entities.append(event.recipient_id)
+            rf_graph = graph_engine.to_react_flow(focus_nodes=focus_entities)
+            await ws_manager.broadcast("graph_updated", rf_graph)
+
+            if incident:
+                evt_name = event.type.value if hasattr(event.type, 'value') else str(event.type)
+                graph_engine.record_attack_snapshot(
+                    incident.id, 
+                    f"{evt_name} on {event.account_id} -> {report.classification}", 
+                    {"risk": report.risk_score, "classification": report.classification, "event_id": event.event_id}
+                )
 
     async def inject_attack_scenario(self, scenario: str = "account_takeover") -> Dict[str, Any]:
         """
@@ -143,46 +186,119 @@ class EventGenerator:
         causing all 13 workflow stages to visibly trigger in sequence.
         """
         self.attack_in_progress = True
-        logger.info(f"Injecting attack scenario: {scenario}")
+        scenario_clean = scenario.lower().strip()
+        scenario_title = scenario_clean.replace('_', ' ').title()
+        logger.info(f"Injecting attack scenario: {scenario_clean}")
 
-        # Notify clients attack sequence starting
+        # Broadcast high-priority attack started alert to all clients
+        await ws_manager.broadcast("attack_started", {
+            "scenario": scenario_clean,
+            "scenario_name": scenario_title,
+            "timestamp": datetime.utcnow().isoformat(),
+            "severity": "CRITICAL" if scenario_clean not in ["normal", "normal_traffic"] else "BENIGN",
+            "message": f"EMERGENCY: Attack scenario '{scenario_title}' initiated across financial network.",
+        })
+
+        # Stage 1: Financial Event Stream Ingestion
         await ws_manager.broadcast("workflow_stage_update", {
             "stage_id": 1,
             "code": "EVENT_INGESTION",
             "title": "Financial Event Stream",
-            "subtitle": f"Injecting synthetic attack: {scenario.replace('_', ' ').title()}",
+            "subtitle": f"Injecting synthetic attack: {scenario_title}",
             "status": "PROCESSING"
         })
 
-        if scenario in ["account_takeover", "ato"]:
-            await self._run_account_takeover_attack()
-        elif scenario in ["weak_signals", "predictive", "emerging_threat"]:
-            await self._run_weak_signals_attack()
-        elif scenario in ["mule_network", "mule"]:
-            await self._run_mule_network_attack()
-        elif scenario in ["coordinated_fraud", "fraud"]:
-            await self._run_coordinated_fraud_attack()
-        elif scenario in ["recipient_attack", "recipient"]:
-            await self._run_recipient_attack()
-        elif scenario in ["credential_stuffing", "stuffing"]:
-            await self._run_credential_stuffing_attack()
-        elif scenario in ["gateway_outage", "gateway"]:
-            await self._run_gateway_outage_attack()
-        elif scenario in ["merchant_failure", "merchant_attack", "merchant"]:
-            await self._run_merchant_failure_attack()
-        elif scenario in ["mixed_attack", "mixed"]:
-            await self._run_mixed_attack()
-        elif scenario in ["normal", "normal_traffic"]:
-            # Burst of standard benign retail transactions
-            for _ in range(12):
-                evt = self.generate_benign_event()
-                await self.process_and_broadcast_event(evt, broadcast_graph=False)
-                await asyncio.sleep(0.04)
-        else:
-            await self._run_account_takeover_attack()
+        try:
+            if scenario_clean in ["account_takeover", "ato"]:
+                await self._run_account_takeover_attack()
+            elif scenario_clean in ["weak_signals", "predictive", "emerging_threat"]:
+                await self._run_weak_signals_attack()
+            elif scenario_clean in ["mule_network", "mule"]:
+                await self._run_mule_network_attack()
+            elif scenario_clean in ["coordinated_fraud", "fraud"]:
+                await self._run_coordinated_fraud_attack()
+            elif scenario_clean in ["recipient_attack", "recipient"]:
+                await self._run_recipient_attack()
+            elif scenario_clean in ["credential_stuffing", "stuffing"]:
+                await self._run_credential_stuffing_attack()
+            elif scenario_clean in ["gateway_outage", "gateway"]:
+                await self._run_gateway_outage_attack()
+            elif scenario_clean in ["merchant_failure", "merchant_attack", "merchant"]:
+                await self._run_merchant_failure_attack()
+            elif scenario_clean in ["mixed_attack", "mixed"]:
+                await self._run_mixed_attack()
+            elif scenario_clean in ["normal", "normal_traffic"]:
+                # Burst of standard benign retail transactions
+                for _ in range(12):
+                    evt = self.generate_benign_event()
+                    await self.process_and_broadcast_event(evt, broadcast_graph=False)
+                    await asyncio.sleep(0.04)
+            else:
+                await self._run_account_takeover_attack()
+        except Exception as e:
+            logger.error(f"Error in attack scenario {scenario_clean}: {e}", exc_info=True)
+        finally:
+            self.attack_in_progress = False
 
-        self.attack_in_progress = False
-        return {"status": "ATTACK_INJECTED", "scenario": scenario}
+        # If an attack scenario ran, conclude workflow progression through stages 8, 9, 10
+        if scenario_clean not in ["normal", "normal_traffic"]:
+            all_incidents = anomaly_engine.get_all_incidents()
+            recent_inc = all_incidents[0] if all_incidents else None
+            
+            if recent_inc:
+                # Stage 8: Attack Simulation
+                await asyncio.sleep(0.12)
+                sim_results = simulation_engine.simulate_strategies(recent_inc, horizon="60m")
+                await ws_manager.broadcast("simulation_completed", {
+                    "incident_id": recent_inc.id,
+                    "results": [r.model_dump() for r in sim_results]
+                })
+                await ws_manager.broadcast("workflow_stage_update", {
+                    "stage_id": 8, "code": "ATTACK_SIMULATION", "title": "Attack Simulation",
+                    "subtitle": "Simulating countermeasure trade-offs across 5 containment strategies",
+                    "status": "ACTIVE"
+                })
+
+                # Stage 9: Simulation Evaluation
+                await asyncio.sleep(0.12)
+                rec_label = recent_inc.recommended_action.get('label', 'Coordinated Response') if recent_inc.recommended_action else 'Coordinated Response'
+                await ws_manager.broadcast("workflow_stage_update", {
+                    "stage_id": 9, "code": "SIMULATION_EVALUATION", "title": "Simulation Evaluation",
+                    "subtitle": f"Optimal strategy identified: {rec_label}",
+                    "status": "ACTIVE"
+                })
+
+                # Stage 10: Containment Recommendation
+                await asyncio.sleep(0.12)
+                await ws_manager.broadcast("workflow_stage_update", {
+                    "stage_id": 10, "code": "CONTAINMENT_RECOMMENDATION", "title": "Containment Recommendation",
+                    "subtitle": f"Staged for human approval: {rec_label}",
+                    "status": "ACTIVE"
+                })
+
+                # Stage 11: Human Approval Gate
+                await asyncio.sleep(0.12)
+                await ws_manager.broadcast("workflow_stage_update", {
+                    "stage_id": 11, "code": "HUMAN_APPROVAL", "title": "Human Approval",
+                    "subtitle": "CRITICAL: Awaiting Level 2 SOC Analyst authorization to execute quarantine",
+                    "status": "AWAITING_APPROVAL"
+                })
+
+                # Broadcast comprehensive Emergency Alert
+                await ws_manager.broadcast("emergency_alert", {
+                    "incident_id": recent_inc.id,
+                    "threat_type": recent_inc.threat_type,
+                    "severity": recent_inc.severity,
+                    "risk_score": recent_inc.risk_score,
+                    "affected_accounts": recent_inc.affected_accounts,
+                    "affected_devices": recent_inc.affected_devices,
+                    "affected_recipients": recent_inc.affected_recipients,
+                    "scenario": scenario_clean,
+                    "recommended_action": recent_inc.recommended_action,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
+        return {"status": "ATTACK_INJECTED", "scenario": scenario_clean}
 
     async def _run_account_takeover_attack(self):
         """

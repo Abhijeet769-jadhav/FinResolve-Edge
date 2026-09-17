@@ -11,13 +11,28 @@ class ResponseEngine:
         """Executes containment response upon analyst authorization, modifying actual backend state."""
         now_ts = datetime.utcnow().isoformat()
 
-        # Isolate entities in graph
+        # Isolate entities in graph with differentiated multi-color security posture
+        # RED: Rogue adversary devices blocked & blacklisted
         for dev_id in incident.affected_devices:
-            graph_engine.mark_entity_contained(dev_id, request.strategy)
-        for rec_id in incident.affected_recipients:
-            graph_engine.mark_entity_contained(rec_id, request.strategy)
+            graph_engine.mark_entity_contained(dev_id, request.strategy, state="BLOCKED", risk=95.0, is_blocked=True)
+            
+        # YELLOW: Victim accounts placed under Step-Up 2FA Authentication challenge & friction
         for acc_id in incident.affected_accounts:
-            graph_engine.mark_entity_contained(acc_id, f"PROTECTED_BY_{request.strategy}")
+            graph_engine.mark_entity_contained(acc_id, f"STEP_UP_{request.strategy}", state="STEP_UP", risk=45.0, is_blocked=False)
+
+        # GREEN: Destination recipient sinks quarantined & protected safely
+        for rec_id in incident.affected_recipients:
+            graph_engine.mark_entity_contained(rec_id, request.strategy, state="PROTECTED", risk=0.0, is_blocked=False)
+
+        # RED: Block known adversary nodes if present
+        for adv_node in ["ADV-QUANTUM-MITM", "BOTNET-SYNDICATE-ALPHA", "BOTNET-SYNDICATE-BETA"]:
+            if graph_engine.graph.has_node(adv_node):
+                graph_engine.mark_entity_contained(adv_node, request.strategy, state="BLOCKED", risk=98.0, is_blocked=True)
+
+        # GREEN: Quarantine & mark attack transactions as CONTAINED / HELD
+        for evt_id in incident.event_ids:
+            if graph_engine.graph.has_node(evt_id):
+                graph_engine.mark_entity_contained(evt_id, request.strategy, state="CONTAINED", risk=0.0, is_blocked=False)
 
         # Update incident status
         incident.status = "CONTAINED"

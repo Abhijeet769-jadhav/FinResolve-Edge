@@ -4,23 +4,48 @@
 
 @layer base {
   body {
-    background-color: #090D16;
+    background-color: #070B13;
+    background-image: 
+      radial-gradient(rgba(30, 41, 59, 0.4) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(15, 23, 42, 0.25) 0%, rgba(7, 11, 19, 0.95) 100%);
+    background-size: 24px 24px, 100% 100%;
     color: #F1F5F9;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    letter-spacing: -0.01em;
+    overflow-x: hidden;
   }
+}
+
+/* Custom Glass & Glow Utilities */
+.glass-panel {
+  background: rgba(17, 24, 39, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.glow-border-emerald {
+  box-shadow: 0 0 16px -3px rgba(16, 185, 129, 0.25);
+}
+
+.glow-border-rose {
+  box-shadow: 0 0 20px -2px rgba(239, 68, 68, 0.35);
+}
+
+.glow-border-blue {
+  box-shadow: 0 0 16px -3px rgba(59, 130, 246, 0.25);
 }
 
 /* Custom SOC Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0B0F19;
+  background: #080C15;
 }
 ::-webkit-scrollbar-thumb {
   background: #1E293B;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
@@ -28,37 +53,43 @@
 
 /* React Flow styling overrides for SOC dark look */
 .react-flow__background {
-  background-color: #0B0F19 !important;
+  background-color: #080C15 !important;
 }
 .react-flow__node {
   cursor: pointer;
 }
 .react-flow__handle {
-  background: #3B82F6 !important;
+  background: #10B981 !important;
   width: 6px !important;
   height: 6px !important;
 }
 .react-flow__controls {
-  box-shadow: none !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
   border: 1px solid #1E293B !important;
-  background: #111827 !important;
-  border-radius: 6px !important;
+  background: #0F172A !important;
+  border-radius: 8px !important;
+  overflow: hidden;
 }
 .react-flow__controls-button {
-  background: #111827 !important;
+  background: #0F172A !important;
   border-bottom: 1px solid #1E293B !important;
   fill: #94A3B8 !important;
+  transition: all 0.2s ease;
 }
 .react-flow__controls-button:hover {
   background: #1E293B !important;
-  fill: #FFFFFF !important;
+  fill: #38BDF8 !important;
 }
 .react-flow__edge-text {
-  fill: #E2E8F0 !important;
+  fill: #F1F5F9 !important;
   font-size: 10px !important;
-  font-weight: 500 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-weight: 600 !important;
 }
 .react-flow__edge-textbg {
-  fill: #0F172A !important;
+  fill: #0B0F19 !important;
+  fill-opacity: 0.92 !important;
   rx: 4px;
+  stroke: #334155;
+  stroke-width: 0.5px;
 }

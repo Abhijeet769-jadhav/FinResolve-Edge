@@ -44,7 +44,7 @@ class PaySimAdapter:
         ip = record.get("ip", f"192.0.2.{(device_seed % 250) + 1}")
 
         step = record.get("step", 1)
-        event_id = f"PYS-{step}-{uuid.uuid4().hex[:8]}"
+        event_id = f"PYS-{step}-{uuid.uuid4().hex[:12].upper()}"
 
         return FinancialEvent(
             event_id=event_id,
